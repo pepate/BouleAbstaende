@@ -12,6 +12,7 @@ const STATE = {
 const HIT_RADIUS = 40;
 const SNAP_RADIUS = 80;
 const TAP_THRESHOLD = 8;
+const LONG_PRESS_MS = 350;
 const STICK_LENGTH_KEY = 'bouli.stickLength';
 const STICK_LENGTH_SEEN_KEY = 'bouli.stickLengthSeen';
 const HISTORY_DB = 'bouli';
@@ -59,6 +60,9 @@ class BouliApp {
     this.dragging = null;
     this.cameraStream = null;
     this.currentHistoryId = null;
+    this.fineTune = null;
+    this.longPressTimer = null;
+    this.pendingTap = null;
 
     this.bindEvents();
     this.updateUI();
@@ -256,10 +260,33 @@ class BouliApp {
       return;
     }
 
-    // No hit on existing markers — what happens depends on current step
+    // No hit — could be a tap-to-place OR a long-press for fine-tune of last marker
+    const lastMarker = this.getLastMarker();
+    if (lastMarker && (this.state === STATE.STEP_JACK || this.state === STATE.STEP_BOULES || this.state === STATE.STEP_DONE)) {
+      // Schedule potential long-press; if user holds, enter fine-tune mode
+      this.pendingTap = {
+        point: p,
+        screen: { x: e.clientX, y: e.clientY },
+        pointerId: e.pointerId,
+        state: this.state,
+      };
+      this.longPressTimer = setTimeout(() => {
+        this.longPressTimer = null;
+        if (this.pendingTap && this.pendingTap.pointerId === e.pointerId) {
+          this.startFineTune(this.pendingTap.point, this.pendingTap.screen, lastMarker);
+          this.pendingTap = null;
+        }
+      }, LONG_PRESS_MS);
+      return;
+    }
+
+    // No marker to fine-tune (or wrong state) — place immediately
+    this.placeAt(p);
+  }
+
+  placeAt(p) {
     switch (this.state) {
       case STATE.STEP_STICK:
-        // First click = p1, second click = p2; otherwise dragging existing endpoint
         if (!this.calibration.p1) {
           this.calibration.p1 = p;
         } else if (!this.calibration.p2) {
@@ -268,20 +295,92 @@ class BouliApp {
         }
         break;
       case STATE.STEP_JACK:
-        // Place jack (replacing if already set)
         this.jack = this.snapToCenter(p, 'jack');
         break;
       case STATE.STEP_BOULES:
       case STATE.STEP_DONE:
-        // Add a new boule (snap to center)
         this.boules.push(this.snapToCenter(p, 'boule'));
         break;
     }
     this.updateUI();
   }
 
+  getLastMarker() {
+    if (this.state === STATE.STEP_JACK) {
+      return this.jack ? { type: 'jack' } : null;
+    }
+    if (this.boules.length > 0) return { type: 'boule', index: this.boules.length - 1 };
+    if (this.jack) return { type: 'jack' };
+    return null;
+  }
+
+  startFineTune(imgPoint, screenPoint, target) {
+    const startMarker = target.type === 'jack' ? this.jack : this.boules[target.index];
+    if (!startMarker) return;
+    this.fineTune = {
+      type: target.type,
+      index: target.index,
+      startMarker: { ...startMarker },
+      startScreen: screenPoint,
+      fingerImg: imgPoint,
+    };
+    if (navigator.vibrate) navigator.vibrate(15);
+    this.showToast('Feinjustierung — bewegen, dann loslassen', 1600);
+    this.render();
+  }
+
+  updateFineTune(clientX, clientY) {
+    const ft = this.fineTune;
+    if (!ft) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const scaleX = this.canvas.width / rect.width;
+    const scaleY = this.canvas.height / rect.height;
+    const dxImg = (clientX - ft.startScreen.x) * scaleX;
+    const dyImg = (clientY - ft.startScreen.y) * scaleY;
+    const newPos = { x: ft.startMarker.x + dxImg, y: ft.startMarker.y + dyImg };
+    if (ft.type === 'jack') this.jack = newPos;
+    else this.boules[ft.index] = newPos;
+    ft.fingerImg = {
+      x: (clientX - rect.left) * scaleX,
+      y: (clientY - rect.top) * scaleY,
+    };
+    this.render();
+    this.updateResults();
+  }
+
+  endFineTune() {
+    this.fineTune = null;
+    this.render();
+    this.updateResults();
+  }
+
+  cancelPendingTap() {
+    if (this.longPressTimer) {
+      clearTimeout(this.longPressTimer);
+      this.longPressTimer = null;
+    }
+    this.pendingTap = null;
+  }
+
   onPointerMove(e) {
-    if (!this.dragging || !this.image) return;
+    if (!this.image) return;
+
+    // Cancel pending long-press if movement exceeds threshold
+    if (this.longPressTimer && this.pendingTap) {
+      const dx = e.clientX - this.pendingTap.screen.x;
+      const dy = e.clientY - this.pendingTap.screen.y;
+      if (Math.abs(dx) > TAP_THRESHOLD || Math.abs(dy) > TAP_THRESHOLD) {
+        this.cancelPendingTap();
+      }
+    }
+
+    if (this.fineTune) {
+      e.preventDefault();
+      this.updateFineTune(e.clientX, e.clientY);
+      return;
+    }
+
+    if (!this.dragging) return;
     e.preventDefault();
     const p = this.getCanvasPoint(e);
     if (this.dragging.justClicked) {
@@ -303,28 +402,38 @@ class BouliApp {
   }
 
   onPointerUp(e) {
+    // Long-press tap that didn't trigger fine-tune → place at original point
+    if (this.longPressTimer && this.pendingTap && this.pendingTap.pointerId === e.pointerId) {
+      this.cancelPendingTap();
+      const p = this.getCanvasPoint(e);
+      this.placeAt(p);
+      return;
+    }
+    this.pendingTap = null;
+
+    if (this.fineTune) {
+      this.endFineTune();
+      return;
+    }
+
     if (!this.dragging) return;
     const d = this.dragging;
     this.dragging = null;
 
     if (d.justClicked) {
-      // Tap on existing marker — REMOVE it
       if (d.type === 'jack') {
         this.jack = null;
       } else if (d.type === 'boule') {
         this.boules.splice(d.index, 1);
       } else if (d.type === 'cal') {
-        // For cal endpoints: tap-to-clear
         this.calibration[d.which] = null;
-        if (!this.calibration.p1 && !this.calibration.p2) this.calibration.pxPerCm = 0;
-        else if (this.calibration.p1 && this.calibration.p2) this.recalcCalibration();
+        if (this.calibration.p1 && this.calibration.p2) this.recalcCalibration();
         else this.calibration.pxPerCm = 0;
       }
       this.updateUI();
       return;
     }
 
-    // Drag end — snap target to center
     if (d.type === 'jack' && this.jack) {
       this.jack = this.snapToCenter(this.jack, 'jack');
     } else if (d.type === 'boule' && this.boules[d.index]) {
@@ -544,8 +653,42 @@ class BouliApp {
       });
     }
 
-    if (this.jack) this.drawJack(this.jack);
-    this.boules.forEach((b, i) => this.drawBoule(b, i + 1));
+    if (this.jack) this.drawJack(this.jack, this.fineTune && this.fineTune.type === 'jack');
+    this.boules.forEach((b, i) => this.drawBoule(b, i + 1, this.fineTune && this.fineTune.type === 'boule' && this.fineTune.index === i));
+
+    // Fine-tune overlay (finger position + connector)
+    if (this.fineTune && this.fineTune.fingerImg) {
+      this.drawFineTuneOverlay();
+    }
+  }
+
+  drawFineTuneOverlay() {
+    const ctx = this.ctx;
+    const f = this.fineTune.fingerImg;
+    const m = this.fineTune.type === 'jack' ? this.jack : this.boules[this.fineTune.index];
+    if (!f || !m) return;
+
+    // Dashed connector finger → marker
+    ctx.strokeStyle = '#fbbf24';
+    ctx.lineWidth = 3 / this.imageScale;
+    ctx.setLineDash([8 / this.imageScale, 5 / this.imageScale]);
+    ctx.beginPath();
+    ctx.moveTo(f.x, f.y);
+    ctx.lineTo(m.x, m.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Finger ring
+    ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
+    ctx.lineWidth = 4 / this.imageScale;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, 28 / this.imageScale, 0, Math.PI * 2);
+    ctx.stroke();
+    // Inner dot
+    ctx.fillStyle = 'rgba(251, 191, 36, 0.4)';
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, 6 / this.imageScale, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   drawCalPoint(p, label) {
@@ -565,9 +708,16 @@ class BouliApp {
     ctx.fillText(label, p.x, p.y);
   }
 
-  drawJack(p) {
+  drawJack(p, active = false) {
     const ctx = this.ctx;
     const r = 18 / this.imageScale;
+    if (active) {
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
+      ctx.lineWidth = 5 / this.imageScale;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 8 / this.imageScale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.fillStyle = '#f97316';
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3 / this.imageScale;
@@ -583,9 +733,16 @@ class BouliApp {
     ctx.stroke();
   }
 
-  drawBoule(p, idx) {
+  drawBoule(p, idx, active = false) {
     const ctx = this.ctx;
     const r = 20 / this.imageScale;
+    if (active) {
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
+      ctx.lineWidth = 5 / this.imageScale;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r + 8 / this.imageScale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.fillStyle = '#0ea5e9';
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3 / this.imageScale;
@@ -667,10 +824,10 @@ class BouliApp {
       case STATE.STEP_LENGTH: return '<span class="step-num">1/3</span>Wie lang ist der Stab?';
       case STATE.STEP_JACK:
         return this.jack
-          ? '<span class="step-num">2/3</span>Schweinchen passt? Tippen zum Ändern'
+          ? '<span class="step-num">2/3</span>Schweinchen passt? <i>Halten</i> zum Feinjustieren'
           : '<span class="step-num">2/3</span>Tippe auf das <b>Schweinchen</b> 🟠';
       case STATE.STEP_BOULES:
-        return `<span class="step-num">3/3</span>Tippe jede <b>Kugel</b> an${this.boules.length ? ` · ${this.boules.length} markiert` : ''}`;
+        return `<span class="step-num">3/3</span>Tippe Kugeln an${this.boules.length ? ` · ${this.boules.length} · <i>halten</i> zum Feinjustieren` : ''}`;
       case STATE.STEP_DONE: return null;
       default: return null;
     }

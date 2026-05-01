@@ -180,8 +180,7 @@ class BouliApp {
         this.state = STATE.STEP_DONE;
         this.currentHistoryId = restore.id || null;
       } else {
-        // Auto-detect ONLY stick and jack (boules are tapped manually for accuracy)
-        const detected = this.autoDetectStickAndJack();
+        const detected = this.autoDetect();
         this.state = STATE.STEP_STICK;
         if (detected.length) this.showToast(`Auto-erkannt: ${detected.join(', ')}`);
       }
@@ -473,50 +472,73 @@ class BouliApp {
     return { x: cx, y: cy };
   }
 
-  // ---------- Auto-detection (stick + jack only) ----------
+  // ---------- Auto-detection ----------
 
-  autoDetectStickAndJack() {
+  autoDetect() {
     if (!this.imageData) return [];
     const id = this.imageData;
     const total = id.width * id.height;
+    const diag = Math.sqrt(id.width * id.width + id.height * id.height);
+    const bg = estimateBackground(id);
     const detected = [];
 
-    // Jack: largest sufficiently orange blob within reasonable size
+    // ----- Jack: largest sufficiently orange blob -----
     const jackBlobs = findBlobs(id, jackPredicate, 80);
-    const goodJacks = jackBlobs
-      .filter(b => b.area >= 100 && b.area <= total * 0.02)
+    const jacks = jackBlobs
+      .filter(b => b.area >= 80 && b.area <= total * 0.02)
       .map(b => ({ ...b, shape: blobShape(b.points) }))
       .filter(b => b.shape.aspectRatio < 2.5)
       .sort((a, b) => b.area - a.area);
-    if (goodJacks.length) {
-      const j = goodJacks[0];
-      this.jack = { x: j.cx, y: j.cy };
+    if (jacks.length) {
+      this.jack = { x: jacks[0].cx, y: jacks[0].cy };
       detected.push('🟠 Schweinchen');
     }
 
-    // Stick: combine all elongated bright fragments (the printed numbers
-    // on a meter stick break the connected blob — merge them by global PCA).
-    const stickBlobs = findBlobs(id, stickPredicate, 200);
-    const fragments = stickBlobs.map(b => ({ ...b, shape: blobShape(b.points) }));
-    if (fragments.length) {
-      // Collect all points from elongated/large fragments
-      const merged = [];
-      for (const f of fragments) {
-        if (f.shape.aspectRatio > 2 || f.area > total * 0.001) {
-          for (let k = 0; k < f.points.length; k++) merged.push(f.points[k]);
-        }
-      }
-      if (merged.length > 200) {
-        const shape = blobShape(merged);
-        const diag = Math.sqrt(id.width * id.width + id.height * id.height);
-        if (shape.major > diag * 0.2 && shape.aspectRatio > 4) {
-          const ends = pcaEndpoints(merged, shape);
-          this.calibration.p1 = ends.p1;
-          this.calibration.p2 = ends.p2;
-          this.recalcCalibration();
-          detected.push('📏 Meterstab');
-        }
-      }
+    // ----- Stick: try multiple thresholds, group collinear fragments -----
+    const stickEnds = detectStick(id, diag);
+    if (stickEnds) {
+      this.calibration.p1 = stickEnds.p1;
+      this.calibration.p2 = stickEnds.p2;
+      this.recalcCalibration();
+      detected.push('📏 Meterstab');
+    }
+
+    // ----- Boules: downsample + dilate the dark mask so metallic
+    //               highlights inside the boule are filled in -----
+    const factor = 4;
+    const ds = downsample(id, factor);
+    const dsW = ds.width, dsH = ds.height;
+    const dsTotal = dsW * dsH;
+
+    // Build raw dark-pixel mask
+    const mask = new Uint8Array(dsTotal);
+    for (let i = 0, p = 0; i < dsTotal; i++, p += 4) {
+      if (boulePredicateBg(ds.data[p], ds.data[p+1], ds.data[p+2], bg)) mask[i] = 1;
+    }
+    // Dilate moderately to merge fragments of the same boule
+    const dilated = dilate(mask, dsW, dsH, 2);
+
+    const minAreaDs = Math.max(40, dsTotal * 0.001);
+    const maxAreaDs = dsTotal * 0.05;
+    const stickPoints = stickEnds ? [stickEnds.p1, stickEnds.p2] : null;
+    const edgePad = Math.max(3, Math.min(dsW, dsH) * 0.03);
+    const rawBlobs = findBlobsFromMask(dilated, dsW, dsH, minAreaDs);
+
+    const boules = rawBlobs
+      .filter(b => b.area >= minAreaDs && b.area <= maxAreaDs)
+      .filter(b => b.minX > edgePad && b.maxX < dsW - edgePad && b.minY > edgePad && b.maxY < dsH - edgePad)
+      .map(b => ({ ...b, shape: blobShape(b.points) }))
+      .filter(b => b.shape.aspectRatio < 1.5)
+      .filter(b => b.area / (b.bw * b.bh) > 0.55)
+      .map(b => ({ ...b, fx: b.cx * factor + factor / 2, fy: b.cy * factor + factor / 2 }))
+      .filter(b => !this.jack || dist({ x: b.fx, y: b.fy }, this.jack) > 30)
+      .filter(b => !stickPoints || distToSegment({ x: b.fx, y: b.fy }, stickPoints[0], stickPoints[1]) > 30)
+      .filter(b => hasLocalContrast(id, b.fx, b.fy, Math.max(b.bw, b.bh) * factor / 2))
+      .sort((a, b) => b.area - a.area)
+      .slice(0, 6);
+    if (boules.length) {
+      this.boules = boules.map(b => this.snapToCenter({ x: b.fx, y: b.fy }, 'boule'));
+      detected.push(`${boules.length} Kugel${boules.length === 1 ? '' : 'n'}`);
     }
 
     return detected;
@@ -1145,15 +1167,245 @@ function boulePredicate(r, g, b) {
   const sat = Math.max(r, g, b) - Math.min(r, g, b);
   return avg < 130 && sat < 40;
 }
+function boulePredicateBg(r, g, b, bg) {
+  // Background-relative: a boule should be noticeably darker than ambient ground
+  const avg = (r + g + b) / 3;
+  const sat = Math.max(r, g, b) - Math.min(r, g, b);
+  return avg < bg * 0.82 && sat < 42 && avg < 165;
+}
 function bouleWeight(r, g, b) {
   if (!boulePredicate(r, g, b)) return 0;
   const avg = (r + g + b) / 3;
   return 135 - avg;
 }
-function stickPredicate(r, g, b) {
-  const avg = (r + g + b) / 3;
-  const sat = Math.max(r, g, b) - Math.min(r, g, b);
-  return avg > 165 && sat < 40;
+
+// ---------- Local contrast check (boule surroundings must be brighter) ----------
+
+function hasLocalContrast(imageData, cx, cy, radius) {
+  const { width: w, height: h, data } = imageData;
+  const sampleR = radius * 1.7;
+  // Outer ring brightness (sand around the boule should be brighter)
+  let sumOuter = 0, countOuter = 0;
+  for (let i = 0; i < 16; i++) {
+    const angle = (i / 16) * Math.PI * 2;
+    const x = Math.round(cx + Math.cos(angle) * sampleR);
+    const y = Math.round(cy + Math.sin(angle) * sampleR);
+    if (x < 0 || x >= w || y < 0 || y >= h) continue;
+    const idx = (y * w + x) * 4;
+    sumOuter += (data[idx] + data[idx+1] + data[idx+2]) / 3;
+    countOuter++;
+  }
+  if (countOuter < 10) return false;
+  const outerAvg = sumOuter / countOuter;
+  // Inner ring brightness (boule interior — may be bright due to metallic highlight,
+  // but at least one rim sample should be dark)
+  let darkSamples = 0;
+  for (let i = 0; i < 16; i++) {
+    const angle = (i / 16) * Math.PI * 2;
+    const x = Math.round(cx + Math.cos(angle) * radius * 0.85);
+    const y = Math.round(cy + Math.sin(angle) * radius * 0.85);
+    if (x < 0 || x >= w || y < 0 || y >= h) continue;
+    const idx = (y * w + x) * 4;
+    const v = (data[idx] + data[idx+1] + data[idx+2]) / 3;
+    if (v < outerAvg * 0.85) darkSamples++;
+  }
+  // Outer must be reasonably bright AND we should see at least a few dark rim points
+  return outerAvg > 125 && darkSamples >= 4;
+}
+
+// ---------- Morphological dilation (square structuring element) ----------
+
+function dilate(mask, w, h, radius) {
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let any = false;
+      for (let dy = -radius; dy <= radius && !any; dy++) {
+        const ny = y + dy;
+        if (ny < 0 || ny >= h) continue;
+        for (let dx = -radius; dx <= radius && !any; dx++) {
+          const nx = x + dx;
+          if (nx < 0 || nx >= w) continue;
+          if (mask[ny * w + nx]) any = true;
+        }
+      }
+      out[y * w + x] = any ? 1 : 0;
+    }
+  }
+  return out;
+}
+
+function findBlobsFromMask(mask, w, h, minArea) {
+  const visited = new Uint8Array(w * h);
+  const blobs = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      if (visited[idx]) continue;
+      if (!mask[idx]) { visited[idx] = 1; continue; }
+      const stack = [idx];
+      let area = 0, sumX = 0, sumY = 0;
+      let minX = x, maxX = x, minY = y, maxY = y;
+      const points = [];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (visited[cur]) continue;
+        visited[cur] = 1;
+        if (!mask[cur]) continue;
+        const cx = cur % w;
+        const cy = (cur - cx) / w;
+        area++;
+        sumX += cx; sumY += cy;
+        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
+        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
+        points.push(cx, cy);
+        if (cx > 0)     stack.push(cur - 1);
+        if (cx < w - 1) stack.push(cur + 1);
+        if (cy > 0)     stack.push(cur - w);
+        if (cy < h - 1) stack.push(cur + w);
+      }
+      if (area >= minArea) {
+        blobs.push({ cx: sumX / area, cy: sumY / area, area, minX, maxX, minY, maxY, bw: maxX - minX + 1, bh: maxY - minY + 1, points });
+      }
+    }
+  }
+  return blobs;
+}
+
+// ---------- Image downsampling (block-average) ----------
+
+function downsample(imageData, factor) {
+  const { width: w, height: h, data } = imageData;
+  const dw = Math.floor(w / factor);
+  const dh = Math.floor(h / factor);
+  const out = new Uint8ClampedArray(dw * dh * 4);
+  for (let by = 0; by < dh; by++) {
+    for (let bx = 0; bx < dw; bx++) {
+      let r = 0, g = 0, b = 0;
+      for (let dy = 0; dy < factor; dy++) {
+        const yIdx = (by * factor + dy) * w;
+        for (let dx = 0; dx < factor; dx++) {
+          const i = (yIdx + bx * factor + dx) * 4;
+          r += data[i]; g += data[i+1]; b += data[i+2];
+        }
+      }
+      const n = factor * factor;
+      const oi = (by * dw + bx) * 4;
+      out[oi] = r / n;
+      out[oi+1] = g / n;
+      out[oi+2] = b / n;
+      out[oi+3] = 255;
+    }
+  }
+  return { data: out, width: dw, height: dh };
+}
+
+// ---------- Background brightness estimate ----------
+
+function estimateBackground(imageData) {
+  const { width: w, height: h, data } = imageData;
+  const samples = [];
+  const step = Math.max(8, Math.floor(Math.min(w, h) / 80));
+  for (let y = step; y < h; y += step) {
+    for (let x = step; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      samples.push((data[i] + data[i+1] + data[i+2]) / 3);
+    }
+  }
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length * 0.6)] || 150; // upper-median
+}
+
+// ---------- Stick detection: multi-threshold + collinear merge ----------
+
+function detectStick(imageData, diag) {
+  const w = imageData.width, h = imageData.height;
+  const total = w * h;
+  // Higher threshold first — more reliable. Fall back to lower only if nothing good.
+  const thresholds = [210, 195, 180, 165, 150];
+  // Reject candidates whose endpoints are too close to image edges
+  const edgePad = Math.min(w, h) * 0.04;
+
+  function inImage(p) {
+    return p.x >= edgePad && p.x <= w - edgePad && p.y >= edgePad && p.y <= h - edgePad;
+  }
+
+  let fallback = null;
+  let fallbackLen = 0;
+
+  for (const t of thresholds) {
+    const blobs = findBlobs(imageData, (r, g, b) => {
+      const avg = (r + g + b) / 3;
+      const sat = Math.max(r, g, b) - Math.min(r, g, b);
+      return avg > t && sat < 50;
+    }, 150);
+    if (!blobs.length) continue;
+
+    const fragments = blobs
+      .map(b => ({ ...b, shape: blobShape(b.points) }))
+      .filter(f => f.shape.aspectRatio > 1.8 || f.area > total * 0.0015);
+    if (!fragments.length) continue;
+
+    const groups = groupCollinear(fragments, diag * 0.04);
+    for (const g of groups) {
+      const s = g.shape;
+      if (s.major < diag * 0.3 || s.aspectRatio < 5) continue;
+      const ends = pcaEndpoints(g.points, s);
+      // Reject if endpoints touch image edges (likely a false positive on a bright band)
+      if (!inImage(ends.p1) || !inImage(ends.p2)) continue;
+      // First good match wins (we prefer higher thresholds)
+      return ends;
+    }
+    // Track relaxed candidate as fallback
+    for (const g of groups) {
+      const s = g.shape;
+      if (s.major > fallbackLen && s.aspectRatio > 4) {
+        const ends = pcaEndpoints(g.points, s);
+        if (inImage(ends.p1) && inImage(ends.p2)) {
+          fallback = ends;
+          fallbackLen = s.major;
+        }
+      }
+    }
+  }
+  return fallback;
+}
+
+function groupCollinear(fragments, perpTolerance) {
+  // Sort by area descending — biggest fragment is the "anchor"
+  const sorted = [...fragments].sort((a, b) => b.area - a.area);
+  const used = new Array(sorted.length).fill(false);
+  const groups = [];
+
+  for (let i = 0; i < sorted.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    const anchor = sorted[i];
+    const group = [anchor];
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (used[j]) continue;
+      const f = sorted[j];
+      // Same direction (cosine similarity >= 0.9 → ~25°)
+      const dot = Math.abs(anchor.shape.vx * f.shape.vx + anchor.shape.vy * f.shape.vy);
+      if (dot < 0.9) continue;
+      // Perpendicular distance from f.center to anchor's axis line
+      const dx = f.cx - anchor.cx;
+      const dy = f.cy - anchor.cy;
+      const perp = Math.abs(dx * (-anchor.shape.vy) + dy * anchor.shape.vx);
+      if (perp > perpTolerance) continue;
+      used[j] = true;
+      group.push(f);
+    }
+    // Combine group points
+    const combined = [];
+    for (const f of group) {
+      for (let k = 0; k < f.points.length; k++) combined.push(f.points[k]);
+    }
+    if (combined.length > 200) {
+      groups.push({ points: combined, shape: blobShape(combined) });
+    }
+  }
+  return groups;
 }
 
 // ---------- Connected components / blobs ----------

@@ -1,4 +1,4 @@
-// Playwright smoke test for BouleMesser
+// Smoke test: load image, verify auto-detection runs without errors
 const { chromium } = require('C:/nvm4w/nodejs/node_modules/@playwright/test/node_modules/playwright');
 const path = require('path');
 
@@ -7,8 +7,8 @@ const URL = 'http://localhost:8765/';
 
 (async () => {
   const browser = await chromium.launch({ headless: false });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await context.newPage();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await ctx.newPage();
 
   page.on('pageerror', e => console.error('PAGE ERROR:', e.message));
   page.on('console', m => { if (m.type() === 'error') console.error('CONSOLE ERROR:', m.text()); });
@@ -16,94 +16,80 @@ const URL = 'http://localhost:8765/';
   await page.goto(URL);
   await page.waitForSelector('#btn-upload');
 
-  // Upload test image
-  await page.setInputFiles('#file-input', TEST_IMAGE);
-  await page.waitForFunction(() => window.app && window.app.image !== null);
-  await page.waitForTimeout(300);
-
-  await page.screenshot({ path: 'test-screenshots/01-loaded.png' });
-
-  // Get canvas position helpers
-  const getCanvasInfo = () => page.evaluate(() => {
-    const c = document.getElementById('canvas');
-    const r = c.getBoundingClientRect();
-    return {
-      left: r.left, top: r.top, width: r.width, height: r.height,
-      naturalW: c.width, naturalH: c.height,
-      scale: r.width / c.width,
-    };
-  });
-
-  // Click on canvas in image-natural coordinates
-  async function clickAt(natX, natY) {
-    const info = await getCanvasInfo();
-    const x = info.left + natX * info.scale;
-    const y = info.top + natY * info.scale;
-    await page.mouse.click(x, y);
+  // Cancel auto-camera modal if it pops up
+  const cancelBtn = await page.$('#camera-cancel');
+  if (cancelBtn) {
+    try { await cancelBtn.click({ timeout: 1000 }); } catch {}
   }
 
-  // Test image dimensions: 512x288 ish — let me verify
-  const info = await getCanvasInfo();
-  console.log('Canvas info:', info);
+  await page.setInputFiles('#file-input', TEST_IMAGE);
+  await page.waitForFunction(() => window.app && window.app.image !== null);
+  await page.waitForTimeout(800);
+  await page.screenshot({ path: 'test-screenshots/auto-detect.png' });
 
-  // From the test image, approximate locations (in natural pixels):
-  // Image is 512 wide.
-  // Meter stick spans roughly from x=120 to x=420 at y=180
-  // Left boule: ~70, 130
-  // Right boule: ~440, 140
-  // Jack (orange): ~250, 150
-  // Stick (white) horizontal across middle
-
-  // Step 1: Calibrate point 1 (left end of stick)
-  await clickAt(125, 180);
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: 'test-screenshots/02-cal-p1.png' });
-
-  // Step 2: Calibrate point 2 (right end of stick)
-  await clickAt(425, 175);
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: 'test-screenshots/03-cal-p2.png' });
-
-  // Step 3: Confirm length (default 100cm — the image shows a meter stick)
-  // Check that input is visible and confirm
-  await page.waitForSelector('#cal-length');
-  await page.fill('#cal-length', '100');
-  await page.click('#btn-cal-confirm');
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: 'test-screenshots/04-cal-done.png' });
-
-  // Step 4: Mark jack (orange ball)
-  await clickAt(247, 150);
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: 'test-screenshots/05-jack.png' });
-
-  // Step 5: Mark boules
-  await clickAt(75, 130);
-  await page.waitForTimeout(100);
-  await clickAt(440, 140);
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: 'test-screenshots/06-boules.png' });
-
-  // Finish
-  await page.click('#btn-finish');
-  await page.waitForTimeout(150);
-  await page.screenshot({ path: 'test-screenshots/07-done.png', fullPage: true });
-
-  // Read computed distances
   const result = await page.evaluate(() => {
     const a = window.app;
+    // Debug: count dilated mask pixels around known boule positions
+    const id = a.imageData;
+    const knownBoules = [{ name: 'left', x: 195, y: 260 }, { name: 'right', x: 805, y: 290 }];
+    const debugBoules = knownBoules.map(b => {
+      const dx = Math.round(b.x / 4);
+      const dy = Math.round(b.y / 4);
+      // Sample 5x5 in ds coords
+      let dark = 0, total = 0;
+      const ds_w = Math.floor(id.width / 4);
+      const ds_h = Math.floor(id.height / 4);
+      // Estimate bg
+      const bg_samples = [];
+      for (let yy = 8; yy < id.height; yy += 8) for (let xx = 8; xx < id.width; xx += 8) {
+        const ii = (yy * id.width + xx) * 4;
+        bg_samples.push((id.data[ii] + id.data[ii+1] + id.data[ii+2]) / 3);
+      }
+      bg_samples.sort((p, q) => p - q);
+      const bg = bg_samples[Math.floor(bg_samples.length * 0.6)];
+      // Now check pixels in original image around (b.x, b.y), 30x30 area
+      let countMatch = 0, countTotal = 0;
+      for (let yy = b.y - 30; yy <= b.y + 30; yy++) {
+        for (let xx = b.x - 30; xx <= b.x + 30; xx++) {
+          if (xx < 0 || yy < 0 || xx >= id.width || yy >= id.height) continue;
+          const ii = (yy * id.width + xx) * 4;
+          const r = id.data[ii], g = id.data[ii+1], bl = id.data[ii+2];
+          const avg = (r + g + bl) / 3;
+          const sat = Math.max(r, g, bl) - Math.min(r, g, bl);
+          if (avg < bg * 0.82 && sat < 42 && avg < 165) countMatch++;
+          countTotal++;
+        }
+      }
+      return { name: b.name, x: b.x, y: b.y, bg, matchPixels: countMatch, totalPixels: countTotal, ratio: (countMatch / countTotal).toFixed(2) };
+    });
+    let bg = -1;
+    if (a.imageData) {
+      const { width: w, height: h, data } = a.imageData;
+      const samples = [];
+      const step = Math.max(8, Math.floor(Math.min(w, h) / 80));
+      for (let y = step; y < h; y += step) {
+        for (let x = step; x < w; x += step) {
+          const i = (y * w + x) * 4;
+          samples.push((data[i] + data[i+1] + data[i+2]) / 3);
+        }
+      }
+      samples.sort((x, y) => x - y);
+      bg = samples[Math.floor(samples.length * 0.6)];
+    }
     return {
+      state: a.state,
       pxPerCm: a.calibration.pxPerCm,
+      lengthCm: a.calibration.lengthCm,
+      stickP1: a.calibration.p1,
+      stickP2: a.calibration.p2,
       jack: a.jack,
+      bouleCount: a.boules.length,
       boules: a.boules,
-      distances: a.boules.map(b => {
-        const dx = b.x - a.jack.x, dy = b.y - a.jack.y;
-        return Math.sqrt(dx*dx+dy*dy) / a.calibration.pxPerCm;
-      }),
+      bgEstimate: bg,
+      debugBoules,
     };
   });
-  console.log('Result:', JSON.stringify(result, null, 2));
+  console.log('Auto-detect result:', JSON.stringify(result, null, 2));
 
   await browser.close();
-  console.log('✓ Test completed successfully');
 })().catch(e => { console.error('TEST FAILED:', e); process.exit(1); });

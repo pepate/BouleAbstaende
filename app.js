@@ -2,12 +2,11 @@
 
 const STATE = {
   IDLE: 'IDLE',
-  CALIBRATE_P1: 'CALIBRATE_P1',
-  CALIBRATE_P2: 'CALIBRATE_P2',
-  CALIBRATE_LENGTH: 'CALIBRATE_LENGTH',
-  MARK_JACK: 'MARK_JACK',
-  MARK_BOULES: 'MARK_BOULES',
-  DONE: 'DONE',
+  STEP_STICK: 'STEP_STICK',
+  STEP_LENGTH: 'STEP_LENGTH',
+  STEP_JACK: 'STEP_JACK',
+  STEP_BOULES: 'STEP_BOULES',
+  STEP_DONE: 'STEP_DONE',
 };
 
 const HIT_RADIUS = 40;
@@ -35,6 +34,8 @@ class BouliApp {
     this.toast = document.getElementById('toast');
     this.lengthModal = document.getElementById('length-modal');
     this.lengthInput = document.getElementById('length-input');
+    this.historyModal = document.getElementById('history-modal');
+    this.historyGrid = document.getElementById('history-grid');
 
     this.imageCanvas = document.createElement('canvas');
     this.imageCtx = this.imageCanvas.getContext('2d', { willReadFrequently: true });
@@ -42,6 +43,7 @@ class BouliApp {
 
     this.state = STATE.IDLE;
     this.image = null;
+    this.imageDataUrl = null;
     this.imageScale = 1;
 
     const savedLength = parseFloat(localStorage.getItem(STICK_LENGTH_KEY));
@@ -56,15 +58,20 @@ class BouliApp {
     this.boules = [];
     this.dragging = null;
     this.cameraStream = null;
+    this.currentHistoryId = null;
 
     this.bindEvents();
     this.updateUI();
+
+    // Try auto-opening camera on first load (best effort)
+    this.tryAutoOpenCamera();
   }
 
   bindEvents() {
     document.getElementById('btn-upload').addEventListener('click', () => this.fileInput.click());
     document.getElementById('btn-camera').addEventListener('click', () => this.openCamera());
     document.getElementById('btn-reset').addEventListener('click', () => this.reset());
+    document.getElementById('btn-history').addEventListener('click', () => this.openHistory());
     this.fileInput.addEventListener('change', (e) => this.handleFile(e));
 
     this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
@@ -73,9 +80,8 @@ class BouliApp {
     this.canvas.addEventListener('pointercancel', (e) => this.onPointerUp(e));
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    this.calChip.addEventListener('click', () => this.editStickLength());
+    this.calChip.addEventListener('click', () => this.openLengthModal());
 
-    // Length modal
     document.getElementById('length-save').addEventListener('click', () => this.saveLengthModal());
     this.lengthInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') this.saveLengthModal();
@@ -92,6 +98,12 @@ class BouliApp {
       });
     });
 
+    if (this.historyModal) {
+      this.historyModal.addEventListener('click', (e) => {
+        if (e.target.dataset.close === '1') this.closeHistory();
+      });
+    }
+
     document.getElementById('camera-cancel').addEventListener('click', () => this.closeCamera());
     document.getElementById('shutter').addEventListener('click', () => this.takePhoto());
     document.getElementById('camera-flip').addEventListener('click', () => this.flipCamera());
@@ -100,16 +112,29 @@ class BouliApp {
     window.addEventListener('orientationchange', () => setTimeout(() => this.fitCanvas(), 100));
   }
 
+  async tryAutoOpenCamera() {
+    if (this.image) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    // Tiny delay so initial UI paints first
+    await new Promise(r => setTimeout(r, 200));
+    if (this.image) return;
+    try {
+      await this.openCamera({ silent: true });
+    } catch (_) {}
+  }
+
   reset() {
     this.state = STATE.IDLE;
     this.image = null;
     this.imageData = null;
+    this.imageDataUrl = null;
     this.calibration.p1 = null;
     this.calibration.p2 = null;
     this.calibration.pxPerCm = 0;
     this.jack = null;
     this.boules = [];
     this.dragging = null;
+    this.currentHistoryId = null;
     this.fileInput.value = '';
     this.updateUI();
   }
@@ -122,10 +147,11 @@ class BouliApp {
     reader.readAsDataURL(file);
   }
 
-  loadImage(src) {
+  loadImage(src, restore = null) {
     const img = new Image();
     img.onload = () => {
       this.image = img;
+      this.imageDataUrl = src;
       this.canvas.width = img.naturalWidth;
       this.canvas.height = img.naturalHeight;
       this.imageCanvas.width = img.naturalWidth;
@@ -142,38 +168,32 @@ class BouliApp {
       this.jack = null;
       this.boules = [];
 
-      const detected = this.autoDetect();
-      this.refreshState();
+      if (restore) {
+        if (restore.calibration) Object.assign(this.calibration, restore.calibration);
+        if (restore.jack) this.jack = { ...restore.jack };
+        if (restore.boules) this.boules = restore.boules.map(b => ({ ...b }));
+        this.recalcCalibration();
+        this.state = STATE.STEP_DONE;
+        this.currentHistoryId = restore.id || null;
+      } else {
+        // Auto-detect ONLY stick and jack (boules are tapped manually for accuracy)
+        const detected = this.autoDetectStickAndJack();
+        this.state = STATE.STEP_STICK;
+        if (detected.length) this.showToast(`Auto-erkannt: ${detected.join(', ')}`);
+      }
       this.fitCanvas();
       this.updateUI();
-
-      if (detected.length) {
-        this.showToast(`Auto-erkannt: ${detected.join(', ')}`);
-      }
     };
     img.src = src;
-  }
-
-  refreshState() {
-    if (this.calibration.pxPerCm > 0 && this.jack && this.boules.length > 0) {
-      this.state = STATE.DONE;
-    } else if (this.calibration.pxPerCm > 0 && this.jack) {
-      this.state = STATE.MARK_BOULES;
-    } else if (this.calibration.pxPerCm > 0) {
-      this.state = STATE.MARK_JACK;
-    } else if (this.calibration.p1 && this.calibration.p2 && !this.lengthHasBeenSet) {
-      this.state = STATE.CALIBRATE_LENGTH;
-    } else {
-      this.state = STATE.CALIBRATE_P1;
-    }
   }
 
   fitCanvas() {
     if (!this.image) return;
     const headerH = document.querySelector('header').offsetHeight;
     const toolbarH = this.toolbar.classList.contains('empty') ? 0 : this.toolbar.offsetHeight;
+    const resultsH = this.resultsBar.classList.contains('hidden') ? 0 : this.resultsBar.offsetHeight;
     const maxW = window.innerWidth - 8;
-    const maxH = window.innerHeight - headerH - toolbarH - 8;
+    const maxH = window.innerHeight - headerH - toolbarH - resultsH - 8;
     const scale = Math.min(
       maxW / this.image.naturalWidth,
       maxH / this.image.naturalHeight,
@@ -210,7 +230,6 @@ class BouliApp {
     for (let i = 0; i < this.boules.length; i++) {
       if (dist(point, this.boules[i]) < r) return { type: 'boule', index: i };
     }
-    // Calibration line (lower priority — only if not on endpoints/markers)
     if (this.calibration.p1 && this.calibration.p2) {
       const lineR = (HIT_RADIUS * 0.6) / this.imageScale;
       if (distToSegment(point, this.calibration.p1, this.calibration.p2) < lineR) {
@@ -228,32 +247,33 @@ class BouliApp {
     const hit = this.hitTest(p);
 
     if (hit) {
-      // Click on calibration line (between endpoints) opens length editor
       if (hit.type === 'cal-line') {
         this.dragging = null;
-        this.editStickLength();
+        this.openLengthModal();
         return;
       }
       this.dragging = { ...hit, justClicked: true, downAt: p };
       return;
     }
 
+    // No hit on existing markers — what happens depends on current step
     switch (this.state) {
-      case STATE.CALIBRATE_P1:
-        this.calibration.p1 = p;
-        this.state = STATE.CALIBRATE_P2;
+      case STATE.STEP_STICK:
+        // First click = p1, second click = p2; otherwise dragging existing endpoint
+        if (!this.calibration.p1) {
+          this.calibration.p1 = p;
+        } else if (!this.calibration.p2) {
+          this.calibration.p2 = p;
+          this.recalcCalibration();
+        }
         break;
-      case STATE.CALIBRATE_P2:
-        this.calibration.p2 = p;
-        this.recalcCalibration();
-        this.state = this.lengthHasBeenSet ? STATE.MARK_JACK : STATE.CALIBRATE_LENGTH;
-        break;
-      case STATE.MARK_JACK:
+      case STATE.STEP_JACK:
+        // Place jack (replacing if already set)
         this.jack = this.snapToCenter(p, 'jack');
-        this.state = STATE.MARK_BOULES;
         break;
-      case STATE.MARK_BOULES:
-      case STATE.DONE:
+      case STATE.STEP_BOULES:
+      case STATE.STEP_DONE:
+        // Add a new boule (snap to center)
         this.boules.push(this.snapToCenter(p, 'boule'));
         break;
     }
@@ -288,21 +308,23 @@ class BouliApp {
     this.dragging = null;
 
     if (d.justClicked) {
-      // Tap on existing marker — remove it
+      // Tap on existing marker — REMOVE it
       if (d.type === 'jack') {
         this.jack = null;
-        if (this.state === STATE.DONE) this.state = STATE.MARK_JACK;
-        this.updateUI();
       } else if (d.type === 'boule') {
         this.boules.splice(d.index, 1);
-        if (this.state === STATE.DONE && this.boules.length === 0) this.state = STATE.MARK_BOULES;
-        this.updateUI();
+      } else if (d.type === 'cal') {
+        // For cal endpoints: tap-to-clear
+        this.calibration[d.which] = null;
+        if (!this.calibration.p1 && !this.calibration.p2) this.calibration.pxPerCm = 0;
+        else if (this.calibration.p1 && this.calibration.p2) this.recalcCalibration();
+        else this.calibration.pxPerCm = 0;
       }
-      // Cal endpoints ignore taps (drag-only)
+      this.updateUI();
       return;
     }
 
-    // Was a drag — snap target to center
+    // Drag end — snap target to center
     if (d.type === 'jack' && this.jack) {
       this.jack = this.snapToCenter(this.jack, 'jack');
     } else if (d.type === 'boule' && this.boules[d.index]) {
@@ -312,7 +334,7 @@ class BouliApp {
     this.updateResults();
   }
 
-  // ---------- Snap to center (after click/drag) ----------
+  // ---------- Snap to center ----------
 
   snapToCenter(p, type) {
     if (!this.imageData) return p;
@@ -342,54 +364,50 @@ class BouliApp {
     return { x: cx, y: cy };
   }
 
-  // ---------- Auto-detection ----------
+  // ---------- Auto-detection (stick + jack only) ----------
 
-  autoDetect() {
+  autoDetectStickAndJack() {
     if (!this.imageData) return [];
     const id = this.imageData;
     const total = id.width * id.height;
     const detected = [];
 
-    // 1. Detect orange jack
-    const jackBlobs = findBlobs(id, jackPredicate, 50);
-    const jack = jackBlobs
-      .filter(b => b.area >= 50 && b.area <= total * 0.02)
-      .sort((a, b) => b.area - a.area)[0];
-
-    // 2. Detect grey boule blobs
-    const bouleMinArea = Math.max(400, total * 0.0015);
-    const bouleMaxArea = total * 0.04;
-    const bouleBlobs = findBlobs(id, boulePredicate, bouleMinArea);
-    const boules = bouleBlobs
-      .filter(b => b.area >= bouleMinArea && b.area <= bouleMaxArea)
+    // Jack: largest sufficiently orange blob within reasonable size
+    const jackBlobs = findBlobs(id, jackPredicate, 80);
+    const goodJacks = jackBlobs
+      .filter(b => b.area >= 100 && b.area <= total * 0.02)
       .map(b => ({ ...b, shape: blobShape(b.points) }))
-      .filter(b => b.shape.aspectRatio < 2.2)
-      .filter(b => !jack || dist({ x: b.cx, y: b.cy }, { x: jack.cx, y: jack.cy }) > 25)
-      .sort((a, b) => b.area - a.area)
-      .slice(0, 8);
-
-    // 3. Detect bright elongated stick
-    const stickBlobs = findBlobs(id, stickPredicate, 500);
-    const stickCandidates = stickBlobs
-      .map(b => ({ ...b, shape: blobShape(b.points) }))
-      .filter(b => b.shape.aspectRatio > 5)
-      .sort((a, b) => b.shape.major - a.shape.major);
-    const stick = stickCandidates[0];
-
-    if (jack) {
-      this.jack = { x: jack.cx, y: jack.cy };
-      detected.push('🟠 Cochonnet');
+      .filter(b => b.shape.aspectRatio < 2.5)
+      .sort((a, b) => b.area - a.area);
+    if (goodJacks.length) {
+      const j = goodJacks[0];
+      this.jack = { x: j.cx, y: j.cy };
+      detected.push('🟠 Schweinchen');
     }
-    if (boules.length) {
-      this.boules = boules.map(b => ({ x: b.cx, y: b.cy }));
-      detected.push(`${boules.length} Kugel${boules.length === 1 ? '' : 'n'}`);
-    }
-    if (stick) {
-      const ends = pcaEndpoints(stick.points, stick.shape);
-      this.calibration.p1 = ends.p1;
-      this.calibration.p2 = ends.p2;
-      this.recalcCalibration();
-      detected.push('📏 Meterstab');
+
+    // Stick: combine all elongated bright fragments (the printed numbers
+    // on a meter stick break the connected blob — merge them by global PCA).
+    const stickBlobs = findBlobs(id, stickPredicate, 200);
+    const fragments = stickBlobs.map(b => ({ ...b, shape: blobShape(b.points) }));
+    if (fragments.length) {
+      // Collect all points from elongated/large fragments
+      const merged = [];
+      for (const f of fragments) {
+        if (f.shape.aspectRatio > 2 || f.area > total * 0.001) {
+          for (let k = 0; k < f.points.length; k++) merged.push(f.points[k]);
+        }
+      }
+      if (merged.length > 200) {
+        const shape = blobShape(merged);
+        const diag = Math.sqrt(id.width * id.width + id.height * id.height);
+        if (shape.major > diag * 0.2 && shape.aspectRatio > 4) {
+          const ends = pcaEndpoints(merged, shape);
+          this.calibration.p1 = ends.p1;
+          this.calibration.p2 = ends.p2;
+          this.recalcCalibration();
+          detected.push('📏 Meterstab');
+        }
+      }
     }
 
     return detected;
@@ -399,6 +417,8 @@ class BouliApp {
     if (this.calibration.p1 && this.calibration.p2 && this.calibration.lengthCm > 0) {
       const px = dist(this.calibration.p1, this.calibration.p2);
       this.calibration.pxPerCm = px / this.calibration.lengthCm;
+    } else {
+      this.calibration.pxPerCm = 0;
     }
   }
 
@@ -410,17 +430,11 @@ class BouliApp {
     localStorage.setItem(STICK_LENGTH_KEY, String(v));
     localStorage.setItem(STICK_LENGTH_SEEN_KEY, '1');
     this.lengthHasBeenSet = true;
-    if (this.state === STATE.CALIBRATE_LENGTH) {
-      this.refreshState();
-    }
     this.updateUI();
   }
 
-  editStickLength() {
-    this.openLengthModal();
-  }
-
   openLengthModal() {
+    if (!this.image) return;
     const current = this.calibration.lengthCm;
     this.lengthInput.value = current;
     this.lengthModal.querySelectorAll('.preset-btn').forEach(b => {
@@ -436,34 +450,60 @@ class BouliApp {
 
   saveLengthModal() {
     const v = parseFloat(this.lengthInput.value);
-    if (isFinite(v) && v > 0) {
-      this.setCalibrationLength(v);
-    }
+    if (isFinite(v) && v > 0) this.setCalibrationLength(v);
     this.closeLengthModal();
   }
 
-  removeJack() {
-    this.jack = null;
-    this.state = STATE.MARK_JACK;
+  // ---------- Step navigation ----------
+
+  goToStep(step) {
+    this.state = step;
     this.updateUI();
   }
 
-  redoCalibration() {
-    this.calibration.p1 = null;
-    this.calibration.p2 = null;
-    this.calibration.pxPerCm = 0;
-    this.state = STATE.CALIBRATE_P1;
-    this.updateUI();
+  next() {
+    switch (this.state) {
+      case STATE.STEP_STICK:
+        if (this.calibration.pxPerCm <= 0) {
+          this.showToast('Beide Enden des Meterstabs setzen');
+          return;
+        }
+        this.goToStep(this.lengthHasBeenSet ? STATE.STEP_JACK : STATE.STEP_LENGTH);
+        break;
+      case STATE.STEP_LENGTH:
+        this.goToStep(STATE.STEP_JACK);
+        break;
+      case STATE.STEP_JACK:
+        if (!this.jack) {
+          this.showToast('Schweinchen markieren');
+          return;
+        }
+        this.goToStep(STATE.STEP_BOULES);
+        break;
+      case STATE.STEP_BOULES:
+        if (this.boules.length === 0) {
+          this.showToast('Mindestens eine Kugel markieren');
+          return;
+        }
+        this.goToStep(STATE.STEP_DONE);
+        this.saveCurrentToHistory();
+        break;
+    }
   }
 
-  finish() {
-    this.state = STATE.DONE;
-    this.updateUI();
-  }
-
-  goToMarkBoules() {
-    this.state = STATE.MARK_BOULES;
-    this.updateUI();
+  back() {
+    switch (this.state) {
+      case STATE.STEP_LENGTH:
+      case STATE.STEP_JACK:
+        this.goToStep(STATE.STEP_STICK);
+        break;
+      case STATE.STEP_BOULES:
+        this.goToStep(STATE.STEP_JACK);
+        break;
+      case STATE.STEP_DONE:
+        this.goToStep(STATE.STEP_BOULES);
+        break;
+    }
   }
 
   // ---------- Rendering ----------
@@ -510,7 +550,7 @@ class BouliApp {
 
   drawCalPoint(p, label) {
     const ctx = this.ctx;
-    const r = 14 / this.imageScale;
+    const r = 16 / this.imageScale;
     ctx.fillStyle = '#ef4444';
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3 / this.imageScale;
@@ -527,7 +567,7 @@ class BouliApp {
 
   drawJack(p) {
     const ctx = this.ctx;
-    const r = 16 / this.imageScale;
+    const r = 18 / this.imageScale;
     ctx.fillStyle = '#f97316';
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3 / this.imageScale;
@@ -536,7 +576,7 @@ class BouliApp {
     ctx.fill();
     ctx.stroke();
     ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2 / this.imageScale;
+    ctx.lineWidth = 2.5 / this.imageScale;
     ctx.beginPath();
     ctx.moveTo(p.x - r * 0.5, p.y); ctx.lineTo(p.x + r * 0.5, p.y);
     ctx.moveTo(p.x, p.y - r * 0.5); ctx.lineTo(p.x, p.y + r * 0.5);
@@ -545,7 +585,7 @@ class BouliApp {
 
   drawBoule(p, idx) {
     const ctx = this.ctx;
-    const r = 18 / this.imageScale;
+    const r = 20 / this.imageScale;
     ctx.fillStyle = '#0ea5e9';
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3 / this.imageScale;
@@ -554,7 +594,7 @@ class BouliApp {
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = 'white';
-    ctx.font = `bold ${18 / this.imageScale}px sans-serif`;
+    ctx.font = `bold ${20 / this.imageScale}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(String(idx), p.x, p.y);
@@ -610,37 +650,42 @@ class BouliApp {
       this.calChip.classList.add('hidden');
     }
 
-    const toolbarHtml = this.getToolbarHtml();
-    if (toolbarHtml) {
-      this.toolbarContent.innerHTML = toolbarHtml;
-      this.toolbar.classList.remove('empty');
-      this.wireToolbarHandlers();
-    } else {
-      this.toolbar.classList.add('empty');
-    }
+    this.toolbarContent.innerHTML = this.getToolbarHtml();
+    this.toolbar.classList.remove('empty');
+    this.wireToolbarHandlers();
 
-    this.fitCanvas();
     this.updateResults();
+    this.fitCanvas();
   }
 
   getStepInfo() {
     switch (this.state) {
-      case STATE.CALIBRATE_P1: return '<span class="step-num">1/3</span>Tippe auf <b>einen Endpunkt</b> des Meterstabs';
-      case STATE.CALIBRATE_P2: return '<span class="step-num">1/3</span>Tippe auf den <b>anderen Endpunkt</b>';
-      case STATE.CALIBRATE_LENGTH: return '<span class="step-num">1/3</span>Wie lang ist der Stab?';
-      case STATE.MARK_JACK: return '<span class="step-num">2/3</span>Tippe auf das <b>Schweinchen</b> 🟠';
-      case STATE.MARK_BOULES: return `<span class="step-num">3/3</span>Tippe jede <b>Kugel</b> an${this.boules.length ? ` (${this.boules.length} markiert)` : ''}`;
-      case STATE.DONE: return null;
+      case STATE.STEP_STICK:
+        if (!this.calibration.p1) return '<span class="step-num">1/3</span>Tippe auf einen <b>Endpunkt</b> des Meterstabs';
+        if (!this.calibration.p2) return '<span class="step-num">1/3</span>Tippe auf den <b>anderen Endpunkt</b>';
+        return '<span class="step-num">1/3</span>Stab passt? Endpunkte zum Anpassen ziehen';
+      case STATE.STEP_LENGTH: return '<span class="step-num">1/3</span>Wie lang ist der Stab?';
+      case STATE.STEP_JACK:
+        return this.jack
+          ? '<span class="step-num">2/3</span>Schweinchen passt? Tippen zum Ändern'
+          : '<span class="step-num">2/3</span>Tippe auf das <b>Schweinchen</b> 🟠';
+      case STATE.STEP_BOULES:
+        return `<span class="step-num">3/3</span>Tippe jede <b>Kugel</b> an${this.boules.length ? ` · ${this.boules.length} markiert` : ''}`;
+      case STATE.STEP_DONE: return null;
       default: return null;
     }
   }
 
   getToolbarHtml() {
     switch (this.state) {
-      case STATE.CALIBRATE_P1:
-      case STATE.CALIBRATE_P2:
-        return null;
-      case STATE.CALIBRATE_LENGTH:
+      case STATE.STEP_STICK:
+        return `
+          <div class="row nav">
+            <button id="btn-next" class="primary-cta" ${this.calibration.pxPerCm > 0 ? '' : 'disabled'}>
+              Weiter — Schweinchen →
+            </button>
+          </div>`;
+      case STATE.STEP_LENGTH:
         return `
           <div class="row">
             <div class="input-group">
@@ -649,54 +694,60 @@ class BouliApp {
               <span class="unit">cm</span>
             </div>
           </div>
-          <div class="row primary"><button id="btn-cal-confirm" class="primary-cta">Bestätigen</button></div>`;
-      case STATE.MARK_JACK:
-        return `<div class="row aux"><button id="btn-cal-redo" class="secondary">↺ Stab neu</button></div>`;
-      case STATE.MARK_BOULES:
+          <div class="row nav">
+            <button id="btn-back" class="secondary">← Stab</button>
+            <button id="btn-save-length" class="primary-cta">Bestätigen</button>
+          </div>`;
+      case STATE.STEP_JACK:
         return `
-          <div class="row primary">
-            <button id="btn-finish" class="primary-cta" ${this.boules.length === 0 ? 'disabled' : ''}>
-              ${this.boules.length === 0 ? 'Mind. 1 Kugel markieren' : 'Fertig — Abstände anzeigen'}
+          <div class="row nav">
+            <button id="btn-back" class="secondary">← Stab</button>
+            <button id="btn-next" class="primary-cta" ${this.jack ? '' : 'disabled'}>
+              Weiter — Kugeln →
             </button>
-          </div>
-          <div class="row aux">
-            <button id="btn-jack-redo" class="secondary">🟠 Schweinchen</button>
-            ${this.boules.length > 0 ? '<button id="btn-undo-boule" class="secondary">↶ Letzte</button>' : ''}
           </div>`;
-      case STATE.DONE:
+      case STATE.STEP_BOULES:
+        return `
+          <div class="row nav">
+            <button id="btn-back" class="secondary">← Schwein.</button>
+            <button id="btn-next" class="primary-cta" ${this.boules.length === 0 ? 'disabled' : ''}>
+              ${this.boules.length === 0 ? 'Mind. 1 Kugel' : 'Fertig — Abstände'}
+            </button>
+          </div>`;
+      case STATE.STEP_DONE:
         return `
           <div class="row aux">
-            <button id="btn-add-more" class="secondary">+ Kugel</button>
-            <button id="btn-jack-redo" class="secondary">🟠 Schweinchen</button>
-            <button id="btn-cal-redo" class="secondary">📏 Stab</button>
+            <button id="btn-step-stick" class="secondary">📏 Stab</button>
+            <button id="btn-step-jack" class="secondary">🟠 Schwein.</button>
+            <button id="btn-step-boules" class="secondary">+ Kugel</button>
           </div>`;
-      default: return null;
+      default: return '';
     }
   }
 
   wireToolbarHandlers() {
-    const calConfirm = document.getElementById('btn-cal-confirm');
-    if (calConfirm) {
+    const next = document.getElementById('btn-next');
+    if (next) next.addEventListener('click', () => this.next());
+    const back = document.getElementById('btn-back');
+    if (back) back.addEventListener('click', () => this.back());
+    const saveLen = document.getElementById('btn-save-length');
+    if (saveLen) {
       const lenInput = document.getElementById('cal-length');
-      const apply = () => this.setCalibrationLength(lenInput.value);
-      calConfirm.addEventListener('click', apply);
+      const apply = () => { this.setCalibrationLength(lenInput.value); this.next(); };
+      saveLen.addEventListener('click', apply);
       lenInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') apply(); });
       setTimeout(() => { lenInput.focus(); lenInput.select(); }, 50);
     }
-    const calRedo = document.getElementById('btn-cal-redo');
-    if (calRedo) calRedo.addEventListener('click', () => this.redoCalibration());
-    const jackRedo = document.getElementById('btn-jack-redo');
-    if (jackRedo) jackRedo.addEventListener('click', () => this.removeJack());
-    const finish = document.getElementById('btn-finish');
-    if (finish) finish.addEventListener('click', () => this.finish());
-    const addMore = document.getElementById('btn-add-more');
-    if (addMore) addMore.addEventListener('click', () => this.goToMarkBoules());
-    const undoBoule = document.getElementById('btn-undo-boule');
-    if (undoBoule) undoBoule.addEventListener('click', () => { this.boules.pop(); this.updateUI(); });
+    const stepStick = document.getElementById('btn-step-stick');
+    if (stepStick) stepStick.addEventListener('click', () => this.goToStep(STATE.STEP_STICK));
+    const stepJack = document.getElementById('btn-step-jack');
+    if (stepJack) stepJack.addEventListener('click', () => this.goToStep(STATE.STEP_JACK));
+    const stepBoules = document.getElementById('btn-step-boules');
+    if (stepBoules) stepBoules.addEventListener('click', () => this.goToStep(STATE.STEP_BOULES));
   }
 
   updateResults() {
-    if (this.state !== STATE.DONE || !this.jack || this.boules.length === 0 || this.calibration.pxPerCm <= 0) {
+    if (this.state !== STATE.STEP_DONE || !this.jack || this.boules.length === 0 || this.calibration.pxPerCm <= 0) {
       this.resultsBar.classList.add('hidden');
       return;
     }
@@ -718,7 +769,7 @@ class BouliApp {
 
   // ---------- Camera ----------
 
-  async openCamera() {
+  async openCamera({ silent = false } = {}) {
     const modal = document.getElementById('camera-modal');
     const video = document.getElementById('camera-video');
     try {
@@ -730,7 +781,7 @@ class BouliApp {
       modal.classList.add('active');
       this.startLevelDetection();
     } catch (err) {
-      alert('Kamera nicht verfügbar: ' + err.message);
+      if (!silent) alert('Kamera nicht verfügbar: ' + err.message);
     }
   }
 
@@ -764,7 +815,7 @@ class BouliApp {
     c.width = video.videoWidth;
     c.height = video.videoHeight;
     c.getContext('2d').drawImage(video, 0, 0);
-    const dataUrl = c.toDataURL('image/jpeg', 0.92);
+    const dataUrl = c.toDataURL('image/jpeg', 0.9);
     this.closeCamera();
     this.loadImage(dataUrl);
   }
@@ -802,12 +853,132 @@ class BouliApp {
       this.levelHandler = null;
     }
   }
+
+  // ---------- History (IndexedDB) ----------
+
+  async getDb() {
+    if (this._db) return this._db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(HISTORY_DB, 1);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(HISTORY_STORE)) {
+          db.createObjectStore(HISTORY_STORE, { keyPath: 'id' });
+        }
+      };
+      req.onsuccess = () => { this._db = req.result; resolve(req.result); };
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  async saveCurrentToHistory() {
+    if (!this.image || !this.imageDataUrl || !this.jack || !this.boules.length) return;
+    try {
+      const db = await this.getDb();
+      const id = this.currentHistoryId || Date.now();
+      this.currentHistoryId = id;
+      const thumb = makeThumbnail(this.image, 240);
+      const record = {
+        id,
+        ts: Date.now(),
+        image: this.imageDataUrl,
+        thumbnail: thumb,
+        calibration: { p1: this.calibration.p1, p2: this.calibration.p2, lengthCm: this.calibration.lengthCm, pxPerCm: this.calibration.pxPerCm },
+        jack: this.jack,
+        boules: this.boules,
+      };
+      await new Promise((res, rej) => {
+        const tx = db.transaction(HISTORY_STORE, 'readwrite');
+        tx.objectStore(HISTORY_STORE).put(record);
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+      });
+      // Prune older entries
+      const all = await this.listHistory();
+      const toDelete = all.slice(HISTORY_LIMIT);
+      for (const e of toDelete) await this.deleteHistory(e.id);
+    } catch (err) {
+      console.warn('history save failed', err);
+    }
+  }
+
+  async listHistory() {
+    try {
+      const db = await this.getDb();
+      return await new Promise((res, rej) => {
+        const tx = db.transaction(HISTORY_STORE, 'readonly');
+        const req = tx.objectStore(HISTORY_STORE).getAll();
+        req.onsuccess = () => res((req.result || []).sort((a, b) => b.ts - a.ts));
+        req.onerror = () => rej(req.error);
+      });
+    } catch (_) {
+      return [];
+    }
+  }
+
+  async deleteHistory(id) {
+    try {
+      const db = await this.getDb();
+      await new Promise((res, rej) => {
+        const tx = db.transaction(HISTORY_STORE, 'readwrite');
+        tx.objectStore(HISTORY_STORE).delete(id);
+        tx.oncomplete = res;
+        tx.onerror = () => rej(tx.error);
+      });
+    } catch (_) {}
+  }
+
+  async openHistory() {
+    if (!this.historyModal) return;
+    const items = await this.listHistory();
+    if (items.length === 0) {
+      this.historyGrid.innerHTML = '<div class="history-empty">Noch keine gespeicherten Bilder</div>';
+    } else {
+      this.historyGrid.innerHTML = items.map(it => {
+        const date = new Date(it.ts);
+        const dateStr = date.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+        return `
+          <div class="history-item" data-id="${it.id}">
+            <img src="${it.thumbnail}" alt="">
+            <div class="history-meta">
+              <span class="history-date">${dateStr}</span>
+              <span class="history-count">${it.boules.length}🎱</span>
+            </div>
+            <button class="history-del" data-del="${it.id}" title="Löschen">✕</button>
+          </div>`;
+      }).join('');
+      this.historyGrid.querySelectorAll('.history-item').forEach(el => {
+        el.addEventListener('click', (e) => {
+          if (e.target.dataset.del) return;
+          const id = parseInt(el.dataset.id);
+          const item = items.find(i => i.id === id);
+          if (item) {
+            this.closeHistory();
+            this.loadImage(item.image, item);
+          }
+        });
+      });
+      this.historyGrid.querySelectorAll('.history-del').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const id = parseInt(btn.dataset.del);
+          await this.deleteHistory(id);
+          this.openHistory();
+        });
+      });
+    }
+    this.historyModal.classList.remove('hidden');
+  }
+
+  closeHistory() {
+    if (this.historyModal) this.historyModal.classList.add('hidden');
+  }
 }
 
 // ---------- Color predicates ----------
 
 function jackPredicate(r, g, b) {
-  return r > 140 && g > 50 && g < 200 && b < 140 && (r - b) > 60 && (r - g) > 15;
+  return r > 160 && g > 60 && g < 200 && b < 140 && (r - b) > 80 && (r - g) > 25;
 }
 function jackWeight(r, g, b) {
   return jackPredicate(r, g, b) ? (r - b) : 0;
@@ -815,20 +986,20 @@ function jackWeight(r, g, b) {
 function boulePredicate(r, g, b) {
   const avg = (r + g + b) / 3;
   const sat = Math.max(r, g, b) - Math.min(r, g, b);
-  return avg < 125 && sat < 35;
+  return avg < 130 && sat < 40;
 }
 function bouleWeight(r, g, b) {
   if (!boulePredicate(r, g, b)) return 0;
   const avg = (r + g + b) / 3;
-  return 130 - avg;
+  return 135 - avg;
 }
 function stickPredicate(r, g, b) {
   const avg = (r + g + b) / 3;
   const sat = Math.max(r, g, b) - Math.min(r, g, b);
-  return avg > 175 && sat < 35;
+  return avg > 165 && sat < 40;
 }
 
-// ---------- Connected components / blob detection ----------
+// ---------- Connected components / blobs ----------
 
 function findBlobs(imageData, predicate, minArea) {
   const { width: w, height: h, data } = imageData;
@@ -844,12 +1015,10 @@ function findBlobs(imageData, predicate, minArea) {
         visited[idx] = 1;
         continue;
       }
-      // Flood fill
       const stack = [idx];
       let area = 0, sumX = 0, sumY = 0;
       let minX = x, maxX = x, minY = y, maxY = y;
       const points = [];
-
       while (stack.length) {
         const cur = stack.pop();
         if (visited[cur]) continue;
@@ -858,29 +1027,18 @@ function findBlobs(imageData, predicate, minArea) {
         const cy = (cur - cx) / w;
         const ci = cur * 4;
         if (!predicate(data[ci], data[ci+1], data[ci+2])) continue;
-
         area++;
         sumX += cx; sumY += cy;
         if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
         if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
-        points.push(cx, cy); // flat array for memory
-
+        points.push(cx, cy);
         if (cx > 0)     stack.push(cur - 1);
         if (cx < w - 1) stack.push(cur + 1);
         if (cy > 0)     stack.push(cur - w);
         if (cy < h - 1) stack.push(cur + w);
       }
-
       if (area >= minArea) {
-        blobs.push({
-          cx: sumX / area,
-          cy: sumY / area,
-          area,
-          minX, maxX, minY, maxY,
-          bw: maxX - minX + 1,
-          bh: maxY - minY + 1,
-          points,
-        });
+        blobs.push({ cx: sumX / area, cy: sumY / area, area, minX, maxX, minY, maxY, bw: maxX - minX + 1, bh: maxY - minY + 1, points });
       }
     }
   }
@@ -905,13 +1063,9 @@ function blobShape(pointsFlat) {
   const lambda2 = trace / 2 - disc;
   const major = Math.sqrt(Math.max(0, lambda1)) * 2;
   const minor = Math.sqrt(Math.max(0, lambda2)) * 2;
-  // Eigenvector for lambda1
   let vx, vy;
-  if (Math.abs(sxy) > 1e-6) {
-    vx = lambda1 - syy; vy = sxy;
-  } else {
-    if (sxx >= syy) { vx = 1; vy = 0; } else { vx = 0; vy = 1; }
-  }
+  if (Math.abs(sxy) > 1e-6) { vx = lambda1 - syy; vy = sxy; }
+  else { if (sxx >= syy) { vx = 1; vy = 0; } else { vx = 0; vy = 1; } }
   const len = Math.sqrt(vx*vx + vy*vy) || 1;
   return { cx, cy, major, minor, aspectRatio: minor > 0 ? major / minor : Infinity, vx: vx / len, vy: vy / len };
 }
@@ -929,6 +1083,8 @@ function pcaEndpoints(pointsFlat, shape) {
   return { p1: { x: minPx, y: minPy }, p2: { x: maxPx, y: maxPy } };
 }
 
+// ---------- Helpers ----------
+
 function dist(a, b) {
   const dx = a.x - b.x, dy = a.y - b.y;
   return Math.sqrt(dx * dx + dy * dy);
@@ -937,7 +1093,26 @@ function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function formatCm(v) { return v % 1 === 0 ? String(v) : v.toFixed(1); }
 
-// Service worker registration (PWA)
+function distToSegment(p, a, b) {
+  const ax = b.x - a.x, ay = b.y - a.y;
+  const len2 = ax * ax + ay * ay;
+  if (len2 === 0) return dist(p, a);
+  let t = ((p.x - a.x) * ax + (p.y - a.y) * ay) / len2;
+  t = clamp(t, 0, 1);
+  const px = a.x + t * ax, py = a.y + t * ay;
+  return Math.sqrt((p.x - px) ** 2 + (p.y - py) ** 2);
+}
+
+function makeThumbnail(image, maxSize = 240) {
+  const c = document.createElement('canvas');
+  const ratio = Math.min(maxSize / image.naturalWidth, maxSize / image.naturalHeight, 1);
+  c.width = Math.max(1, Math.round(image.naturalWidth * ratio));
+  c.height = Math.max(1, Math.round(image.naturalHeight * ratio));
+  c.getContext('2d').drawImage(image, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.7);
+}
+
+// Service worker
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('./sw.js').catch(() => {});

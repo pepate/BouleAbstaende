@@ -337,6 +337,79 @@
     color: #93c5fd;
   }
 
+  /* ---------- History modal ---------- */
+  #history-modal .modal-content {
+    max-width: 520px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+  }
+  #history-grid {
+    flex: 1;
+    overflow-y: auto;
+    margin: 8px -4px 12px;
+    padding: 4px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+    min-height: 100px;
+  }
+  .history-empty {
+    grid-column: 1 / -1;
+    color: #94a3b8;
+    text-align: center;
+    padding: 32px 16px;
+    font-size: 14px;
+  }
+  .history-item {
+    position: relative;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: transform 0.05s, border-color 0.15s;
+  }
+  .history-item:hover { border-color: #3b82f6; }
+  .history-item:active { transform: scale(0.97); }
+  .history-item img {
+    width: 100%;
+    aspect-ratio: 4/3;
+    object-fit: cover;
+    display: block;
+    background: #020617;
+  }
+  .history-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 8px;
+    font-size: 11px;
+    color: #cbd5e1;
+    background: rgba(0,0,0,0.4);
+  }
+  .history-meta .history-count { color: #60a5fa; font-weight: 600; }
+  .history-del {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    background: rgba(0, 0, 0, 0.6);
+    color: white;
+    border: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 12px;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+    min-width: 24px;
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .history-del:hover { background: rgba(220, 38, 38, 0.8); }
+
   #toast {
     position: absolute;
     top: 60px;
@@ -433,6 +506,16 @@
     background: #334155;
   }
   #toolbar .row.primary { flex-direction: column; }
+  #toolbar .row.nav { gap: 8px; }
+  #toolbar .row.nav button.primary-cta {
+    flex: 1;
+    width: auto;
+  }
+  #toolbar .row.nav button.secondary {
+    flex: 0 0 auto;
+    padding: 14px 14px;
+    font-size: 14px;
+  }
 
   .input-group {
     display: flex;
@@ -607,6 +690,7 @@
     <button id="cal-chip" class="hidden" title="Stablänge anpassen" aria-label="Stablänge anpassen">
       📏 <span id="cal-chip-value">100</span> cm <span class="edit-icon">✎</span>
     </button>
+    <button id="btn-history" class="icon-btn" title="Verlauf" aria-label="Verlauf">🕒</button>
     <button id="btn-upload" class="icon-btn" title="Bild laden" aria-label="Bild laden">📁</button>
     <button id="btn-reset" class="icon-btn" title="Neu starten" aria-label="Neu starten">↺</button>
   </div>
@@ -616,15 +700,11 @@
   <div id="placeholder">
     <img class="ph-logo" src="icons/icon-512.png" alt="Bouli">
     <h2>Bouli</h2>
-    <p>Foto direkt von oben mit Meterstab im Bild — Bouli erkennt Kugeln und Schweinchen automatisch.</p>
+    <p>Foto direkt von oben mit Meterstab im Bild aufnehmen.</p>
     <div class="ph-buttons">
       <button id="btn-camera" class="big-cta">
         <span class="icon">📷</span>
         <span>Kamera öffnen</span>
-      </button>
-      <button id="btn-upload" class="big-cta secondary">
-        <span class="icon">📁</span>
-        <span>Bild auswählen</span>
       </button>
     </div>
     <input type="file" id="file-input" accept="image/*">
@@ -675,6 +755,18 @@
     <div class="modal-actions">
       <button id="length-cancel" class="secondary" data-close="1">Abbrechen</button>
       <button id="length-save">Speichern</button>
+    </div>
+  </div>
+</div>
+
+<div id="history-modal" class="modal hidden">
+  <div class="modal-backdrop" data-close="1"></div>
+  <div class="modal-content">
+    <h3>Verlauf</h3>
+    <p class="modal-hint">Letzte Messungen — antippen zum erneut Öffnen.</p>
+    <div id="history-grid"></div>
+    <div class="modal-actions">
+      <button class="secondary" data-close="1">Schließen</button>
     </div>
   </div>
 </div>

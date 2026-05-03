@@ -1,7 +1,7 @@
 {
-  "name": "Bouli — Boule Abstandsmessung",
+  "name": "Bouli — Welche Boule liegt am nächsten?",
   "short_name": "Bouli",
-  "description": "Misst Abstände der Boule-Kugeln zum Cochonnet anhand eines Fotos und eines Meterstabs als Referenz.",
+  "description": "Foto von oben — Bouli zeigt dir, welche Boule am nächsten am Schweinchen liegt.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

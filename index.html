@@ -99,6 +99,19 @@
     font-size: 18px;
   }
   button.icon-btn:hover { background: #475569; }
+  button.icon-btn.hidden { display: none; }
+  button.install-btn {
+    background: #16a34a;
+    font-size: 13px;
+    padding: 10px 12px;
+    gap: 4px;
+    font-weight: 600;
+  }
+  button.install-btn:hover { background: #15803d; }
+  button.install-btn .install-label { display: inline; }
+  @media (max-width: 380px) {
+    button.install-btn .install-label { display: none; }
+  }
   button.primary-cta {
     width: 100%;
     padding: 16px 20px;
@@ -690,6 +703,7 @@
     <h1>Bouli</h1>
   </div>
   <div class="header-actions">
+    <button id="btn-install" class="icon-btn install-btn hidden" title="App installieren" aria-label="App installieren">⬇️ <span class="install-label">Installieren</span></button>
     <button id="btn-history" class="icon-btn" title="Verlauf" aria-label="Verlauf">🕒</button>
     <button id="btn-upload" class="icon-btn" title="Bild laden" aria-label="Bild laden">📁</button>
     <button id="btn-reset" class="icon-btn" title="Neu starten" aria-label="Neu starten">↺</button>

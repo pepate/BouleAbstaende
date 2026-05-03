@@ -1043,4 +1043,57 @@ if ('serviceWorker' in navigator) {
   });
 }
 
+// ---------- PWA install prompt ----------
+
+(() => {
+  const btn = document.getElementById('btn-install');
+  if (!btn) return;
+
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+  if (isStandalone) return; // already installed — keep button hidden
+
+  const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+
+  let deferredPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPrompt = e;
+    btn.classList.remove('hidden');
+  });
+
+  window.addEventListener('appinstalled', () => {
+    btn.classList.add('hidden');
+    deferredPrompt = null;
+  });
+
+  btn.addEventListener('click', async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') btn.classList.add('hidden');
+      deferredPrompt = null;
+      return;
+    }
+    if (isIos) {
+      alert(
+        'Bouli auf den Home-Bildschirm:\n\n' +
+        '1. Tippe unten auf das Teilen-Symbol (Quadrat mit Pfeil)\n' +
+        '2. Wähle "Zum Home-Bildschirm hinzufügen"\n' +
+        '3. Bestätige mit "Hinzufügen"'
+      );
+    } else {
+      alert(
+        'App installieren:\n\n' +
+        'Öffne das Browser-Menü (drei Punkte) und wähle\n' +
+        '"App installieren" oder "Zum Startbildschirm hinzufügen".'
+      );
+    }
+  });
+
+  // On iOS, show the button immediately (no beforeinstallprompt event there)
+  if (isIos) btn.classList.remove('hidden');
+})();
+
 window.app = new BouliApp();

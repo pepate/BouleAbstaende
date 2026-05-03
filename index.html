@@ -7,8 +7,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Bouli">
-<meta name="description" content="Misst Boule-Abstände zum Cochonnet aus einem Foto mit Meterstab als Referenz.">
-<title>Bouli — Boule Abstandsmessung</title>
+<meta name="description" content="Welche Boule liegt am nächsten am Schweinchen? Foto von oben — Bouli zeigt's.">
+<title>Bouli — Welche Boule liegt am nächsten?</title>
 
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
@@ -690,9 +690,6 @@
     <h1>Bouli</h1>
   </div>
   <div class="header-actions">
-    <button id="cal-chip" class="hidden" title="Stablänge anpassen" aria-label="Stablänge anpassen">
-      📏 <span id="cal-chip-value">100</span> cm <span class="edit-icon">✎</span>
-    </button>
     <button id="btn-history" class="icon-btn" title="Verlauf" aria-label="Verlauf">🕒</button>
     <button id="btn-upload" class="icon-btn" title="Bild laden" aria-label="Bild laden">📁</button>
     <button id="btn-reset" class="icon-btn" title="Neu starten" aria-label="Neu starten">↺</button>
@@ -703,7 +700,7 @@
   <div id="placeholder">
     <img class="ph-logo" src="icons/icon-512.png" alt="Bouli">
     <h2>Bouli</h2>
-    <p>Foto direkt von oben mit Meterstab im Bild aufnehmen.</p>
+    <p>Halte das Handy <b>genau über dem Schweinchen</b> und mache ein Foto direkt von oben.</p>
     <div class="ph-buttons">
       <button id="btn-camera" class="big-cta">
         <span class="icon">📷</span>
@@ -738,27 +735,6 @@
     <button id="camera-cancel">✕</button>
     <button id="shutter" title="Foto aufnehmen" aria-label="Auslöser"></button>
     <button id="camera-flip">↻</button>
-  </div>
-</div>
-
-<div id="length-modal" class="modal hidden">
-  <div class="modal-backdrop" data-close="1"></div>
-  <div class="modal-content">
-    <h3>Stablänge anpassen</h3>
-    <p class="modal-hint">Wie lang ist der Referenzstab im Bild?</p>
-    <div class="quick-presets">
-      <button class="preset-btn" data-cm="50">50 cm</button>
-      <button class="preset-btn" data-cm="100">100 cm</button>
-      <button class="preset-btn" data-cm="200">200 cm</button>
-    </div>
-    <div class="modal-input-group">
-      <input type="number" id="length-input" inputmode="decimal" step="0.1" min="1">
-      <span class="modal-unit">cm</span>
-    </div>
-    <div class="modal-actions">
-      <button id="length-cancel" class="secondary" data-close="1">Abbrechen</button>
-      <button id="length-save">Speichern</button>
-    </div>
   </div>
 </div>
 

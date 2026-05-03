@@ -226,11 +226,14 @@ class BouliApp {
   placeAt(p) {
     switch (this.state) {
       case STATE.STEP_JACK:
+        // Snap helps with the small orange jack; the user mostly aims close.
         this.jack = this.snapToCenter(p, 'jack');
         break;
       case STATE.STEP_BOULES:
       case STATE.STEP_DONE:
-        this.boules.push(this.snapToCenter(p, 'boule'));
+        // No auto-snap for boules — metallic highlight makes snap unreliable.
+        // User places where they tap; long-press for fine-tune.
+        this.boules.push(p);
         break;
     }
     this.updateUI();
@@ -355,9 +358,8 @@ class BouliApp {
 
     if (d.type === 'jack' && this.jack) {
       this.jack = this.snapToCenter(this.jack, 'jack');
-    } else if (d.type === 'boule' && this.boules[d.index]) {
-      this.boules[d.index] = this.snapToCenter(this.boules[d.index], 'boule');
     }
+    // No snap on boule drag end — user controls placement precisely
     this.render();
     this.updateResults();
   }
@@ -512,53 +514,88 @@ class BouliApp {
     ctx.fill();
   }
 
-  drawJack(p, active = false) {
+  drawCrosshair(p, ringColor, opts = {}) {
     const ctx = this.ctx;
-    const r = 18 / this.imageScale;
-    if (active) {
-      ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
-      ctx.lineWidth = 5 / this.imageScale;
+    const s = this.imageScale;
+    const dotR = (opts.dotR || 3) / s;
+    const ringR = (opts.ringR || 16) / s;
+    const ringW = (opts.ringW || 2.5) / s;
+
+    // Active halo (fine-tune mode)
+    if (opts.active) {
+      ctx.strokeStyle = 'rgba(251, 191, 36, 0.75)';
+      ctx.lineWidth = 4 / s;
       ctx.beginPath();
-      ctx.arc(p.x, p.y, r + 8 / this.imageScale, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, ringR + 6 / s, 0, Math.PI * 2);
       ctx.stroke();
     }
-    ctx.fillStyle = '#f97316';
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 3 / this.imageScale;
+
+    // Outer black halo for contrast against any background
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = ringW + 2.5 / s;
     ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.strokeStyle = 'white';
-    ctx.lineWidth = 2.5 / this.imageScale;
+
+    // Colored ring
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = ringW;
     ctx.beginPath();
-    ctx.moveTo(p.x - r * 0.5, p.y); ctx.lineTo(p.x + r * 0.5, p.y);
-    ctx.moveTo(p.x, p.y - r * 0.5); ctx.lineTo(p.x, p.y + r * 0.5);
+    ctx.arc(p.x, p.y, ringR, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Tiny crosshair lines extending into the ring (helps centering)
+    ctx.strokeStyle = ringColor;
+    ctx.lineWidth = ringW * 0.7;
+    const gap = dotR + 2 / s;
+    const reach = ringR - 2 / s;
+    ctx.beginPath();
+    ctx.moveTo(p.x - reach, p.y); ctx.lineTo(p.x - gap, p.y);
+    ctx.moveTo(p.x + gap, p.y);   ctx.lineTo(p.x + reach, p.y);
+    ctx.moveTo(p.x, p.y - reach); ctx.lineTo(p.x, p.y - gap);
+    ctx.moveTo(p.x, p.y + gap);   ctx.lineTo(p.x, p.y + reach);
+    ctx.stroke();
+
+    // Center dot — small red, white outline
+    ctx.fillStyle = '#ef4444';
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 1.2 / s;
     ctx.stroke();
   }
 
+  drawJack(p, active = false) {
+    this.drawCrosshair(p, '#f97316', { active, dotR: 3, ringR: 14, ringW: 2.5 });
+  }
+
   drawBoule(p, idx, active = false) {
+    const s = this.imageScale;
+    this.drawCrosshair(p, '#0ea5e9', { active, dotR: 3, ringR: 16, ringW: 2.5 });
+    // Number badge in the upper-right of the marker (outside the ring)
     const ctx = this.ctx;
-    const r = 20 / this.imageScale;
-    if (active) {
-      ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
-      ctx.lineWidth = 5 / this.imageScale;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, r + 8 / this.imageScale, 0, Math.PI * 2);
-      ctx.stroke();
-    }
+    const fontSize = 14 / s;
+    const bx = p.x + 14 / s;
+    const by = p.y - 14 / s;
+    const padding = 4 / s;
+    ctx.font = `bold ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const text = String(idx);
+    const tw = ctx.measureText(text).width;
+    const w = Math.max(fontSize, tw) + padding * 2;
+    const h = fontSize + padding * 2;
+    // Badge background
     ctx.fillStyle = '#0ea5e9';
     ctx.strokeStyle = 'white';
-    ctx.lineWidth = 3 / this.imageScale;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.lineWidth = 1.5 / s;
+    const radius = h / 2;
+    roundRect(ctx, bx - w / 2, by - h / 2, w, h, radius);
     ctx.fill();
     ctx.stroke();
     ctx.fillStyle = 'white';
-    ctx.font = `bold ${20 / this.imageScale}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(idx), p.x, p.y);
+    ctx.fillText(text, bx, by);
   }
 
   drawLabel(text, x, y, color) {
@@ -980,6 +1017,16 @@ function dist(a, b) {
 }
 function midpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
 function makeThumbnail(image, maxSize = 240) {
   const c = document.createElement('canvas');

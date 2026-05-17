@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f14">
+  <title>Bouli – Live AR</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <span class="logo">Bouli</span>
+      <button id="install-btn" hidden>Installieren</button>
+    </header>
+
+    <div id="viewport">
+      <video id="camera" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+
+      <div id="level-indicator">
+        <div id="level-bubble"></div>
+      </div>
+
+      <div id="level-warning" hidden>Halt waagerecht!</div>
+    </div>
+
+    <div id="permission-screen">
+      <h1>Bouli</h1>
+      <p>Live-AR-App für Boule-Abstände.<br>Halt das Smartphone waagerecht über das Schweinchen.</p>
+      <button id="start-btn">Kamera starten</button>
+      <p id="permission-error" hidden></p>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

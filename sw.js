@@ -1,20 +1,22 @@
-// Bouli service worker — offline-first cache
-const CACHE = 'bouli-v1';
+const CACHE = 'bouli-live-v1';
 const ASSETS = [
   './',
   './index.html',
+  './styles.css',
   './app.js',
   './manifest.json',
+  './modules/camera.js',
+  './modules/detector.js',
+  './modules/ranker.js',
+  './modules/renderer.js',
+  './modules/level.js',
+  './modules/pwa.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/apple-touch-icon.png',
-  './icons/favicon-32.png',
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(ASSETS)).catch(() => {})
-  );
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
   self.skipWaiting();
 });
 
@@ -28,22 +30,5 @@ self.addEventListener('activate', (e) => {
 });
 
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET') return;
-  const url = new URL(e.request.url);
-  if (url.origin !== self.location.origin) return;
-
-  e.respondWith(
-    caches.match(e.request).then((cached) => {
-      const network = fetch(e.request)
-        .then((resp) => {
-          if (resp && resp.ok) {
-            const clone = resp.clone();
-            caches.open(CACHE).then((c) => c.put(e.request, clone));
-          }
-          return resp;
-        })
-        .catch(() => cached);
-      return cached || network;
-    })
-  );
+  e.respondWith(caches.match(e.request).then((r) => r || fetch(e.request)));
 });

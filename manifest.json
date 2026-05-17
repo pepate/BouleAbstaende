@@ -1,39 +1,15 @@
 {
-  "name": "Bouli — Welche Boule liegt am nächsten?",
+  "name": "Bouli – Live AR",
   "short_name": "Bouli",
-  "description": "Foto von oben — Bouli zeigt dir, welche Boule am nächsten am Schweinchen liegt.",
+  "description": "Live-AR-App zur Boule-Abstandsmessung – richte die Kamera über das Schweinchen und sieh sofort, welche Kugel am nächsten ist.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "orientation": "any",
-  "background_color": "#0f172a",
-  "theme_color": "#0f172a",
-  "lang": "de",
-  "categories": ["sports", "utilities", "productivity"],
+  "orientation": "portrait",
+  "background_color": "#0b0f14",
+  "theme_color": "#0b0f14",
   "icons": [
-    {
-      "src": "icons/icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "icons/icon-192-maskable.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "maskable"
-    },
-    {
-      "src": "icons/icon-512-maskable.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
-    }
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ]
 }

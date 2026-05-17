@@ -1,5 +1,5 @@
 import { test, assertEqual, assertClose, createTestImage } from './harness.js';
-import { toGrayscale, gaussianBlur, sobel } from '../modules/detector.js';
+import { toGrayscale, gaussianBlur, sobel, houghCircles, nonMaxSuppression } from '../modules/detector.js';
 
 test('toGrayscale: black pixels stay 0', () => {
   const img = createTestImage(2, 2, ctx => {
@@ -53,4 +53,38 @@ test('sobel: vertical edge is detected', () => {
   if (out[2 * w + 2] < 100) {
     throw new Error('Expected strong edge at boundary, got ' + out[2 * w + 2]);
   }
+});
+
+test('houghCircles: detects single drawn circle', () => {
+  const w = 80, h = 80;
+  const img = createTestImage(w, h, ctx => {
+    ctx.fillStyle = '#000000';
+    ctx.beginPath();
+    ctx.arc(40, 40, 15, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  const gray = toGrayscale(img);
+  const edges = sobel(gray, w, h);
+  const candidates = houghCircles(edges, w, h, 12, 18, 60);
+  const hit = candidates.find(c =>
+    Math.hypot(c.x - 40, c.y - 40) < 3 && Math.abs(c.r - 15) <= 2
+  );
+  if (!hit) {
+    throw new Error('No circle detected at (40,40) r=15. Got ' + candidates.length + ' candidates.');
+  }
+});
+
+test('nonMaxSuppression: keeps only highest-score in cluster', () => {
+  const cands = [
+    { x: 50, y: 50, r: 10, score: 30 },
+    { x: 52, y: 51, r: 10, score: 40 },
+    { x: 100, y: 100, r: 10, score: 25 },
+  ];
+  const out = nonMaxSuppression(cands, 10);
+  assertEqual(out.length, 2);
+  assertEqual(out[0].score, 40);
+});
+
+test('nonMaxSuppression: empty input returns empty', () => {
+  assertEqual(nonMaxSuppression([], 10).length, 0);
 });

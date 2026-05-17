@@ -42,3 +42,62 @@ export function sobel(gray, w, h) {
   }
   return out;
 }
+
+const N_ANGLES = 60;
+
+export function houghCircles(edges, w, h, rMin, rMax, edgeThreshold = 80) {
+  const candidates = [];
+
+  for (let r = rMin; r <= rMax; r++) {
+    const acc = new Uint16Array(w * h);
+
+    const dxs = new Int16Array(N_ANGLES);
+    const dys = new Int16Array(N_ANGLES);
+    for (let i = 0; i < N_ANGLES; i++) {
+      const theta = (2 * Math.PI * i) / N_ANGLES;
+      dxs[i] = Math.round(r * Math.cos(theta));
+      dys[i] = Math.round(r * Math.sin(theta));
+    }
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (edges[y * w + x] < edgeThreshold) continue;
+        for (let i = 0; i < N_ANGLES; i++) {
+          const cx = x - dxs[i];
+          const cy = y - dys[i];
+          if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
+            acc[cy * w + cx]++;
+          }
+        }
+      }
+    }
+
+    const accThreshold = Math.max((N_ANGLES * 0.5) | 0, 15);
+    for (let y = r; y < h - r; y++) {
+      for (let x = r; x < w - r; x++) {
+        const score = acc[y * w + x];
+        if (score < accThreshold) continue;
+        candidates.push({ x, y, r, score });
+      }
+    }
+  }
+
+  return candidates;
+}
+
+export function nonMaxSuppression(candidates, minDistance) {
+  if (candidates.length === 0) return [];
+  const sorted = [...candidates].sort((a, b) => b.score - a.score);
+  const result = [];
+  for (const c of sorted) {
+    let suppressed = false;
+    for (const k of result) {
+      if (Math.hypot(c.x - k.x, c.y - k.y) < minDistance) {
+        suppressed = true;
+        break;
+      }
+    }
+    if (!suppressed) result.push(c);
+  }
+  return result;
+}

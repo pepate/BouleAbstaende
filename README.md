@@ -1,69 +1,79 @@
-# Bouli — Boule-Abstandsmessung
+# Bouli — Live-AR Boule-Abstandsmessung
 
-Eine kleine **PWA** zum schnellen Messen von Boule-/Pétanque-Abständen aus einem Foto. Kein Backend, kein API-Key, läuft komplett im Browser.
+Eine **PWA**, die per Live-Kamera Boule-Kugeln erkennt und in Echtzeit anzeigt, welche Kugel am nächsten zum Schweinchen liegt. Kein Backend, läuft komplett im Browser.
 
 ![Bouli Logo](icons/icon-192.png)
 
 ## Was kann Bouli?
 
-- **Foto aufnehmen** mit Kamera (mit Wasserwaage-Anzeige für eine ehrliche Draufsicht) oder vorhandenes Bild laden.
-- **Auto-Erkennung**: Bouli versucht den Meterstab, das Schweinchen (Cochonnet) und die Kugeln automatisch zu finden.
-- **Tippen zum Korrigieren**:
-  - Tippe auf eine Kugel/Schweinchen → entfernt den Marker.
-  - Tippe auf den Meterstab → öffnet das Modal, um die Länge anzupassen.
-  - Tippe auf einen leeren Bereich → setzt einen neuen Marker (snappt automatisch in den Mittelpunkt der Kugel).
-- **Anpassbare Stablänge**: 50 / 100 / 200 cm Presets oder freier Wert. Wert wird lokal gespeichert (kein Server).
+- **Live-Kamera mit AR-Overlay**: Fadenkreuz in der Bildmitte markiert das Schweinchen, Kugeln werden automatisch erkannt.
+- **Sofort-Ranking**: Nächste Kugel grün hervorgehoben, andere mit Rang + Prozent (relativ zur nächsten).
+- **Wasserwaage**: Bubble-Indikator unten zentriert, warnt bei Schräglage — die Kamera soll waagerecht über dem Schweinchen liegen.
+- **Vollautomatisch**: Keine manuelle Korrektur, kein Antippen, kein Foto-Knopf.
 - **Offline-fähig**: Service Worker cached die App nach dem ersten Aufruf.
 - **Installierbar**: Als PWA auf iOS/Android/Desktop hinzufügen.
 
 ## Bedienung
 
-1. App öffnen, Foto aufnehmen oder laden — der Meterstab muss sichtbar sein.
-2. Bouli erkennt Stab, Schweinchen und Kugeln automatisch und zeigt die Abstände.
-3. Falsch erkannte Marker antippen → entfernt. Korrekte Position antippen → neuer Marker mit Snap.
-4. Stablänge oben rechts im Header antippen, falls nicht 100 cm.
+1. App öffnen, Kamera erlauben.
+2. Smartphone waagerecht über das Schweinchen halten — Bubble-Wasserwaage zeigt, wie gerade.
+3. Bildmitte = Schweinchen-Position. Erkannte Kugeln werden nach Pixel-Abstand sortiert.
 
 ## Tech-Stack
 
-- **Vanilla JS / HTML / CSS** — keine Frameworks
-- **Canvas 2D** für Bildanzeige & Annotationen
-- **Connected-Components + PCA** für Auto-Erkennung
-- **localStorage** für Stablänge
+- **Vanilla JS / HTML / CSS** — keine Frameworks, keine Build-Tools
+- **Canvas 2D** für AR-Overlay
+- **Hough Circle Transform** für Live-Kugel-Erkennung (selbst implementiert)
+- **DeviceOrientation API** für Wasserwaage
+- **getUserMedia** für Live-Kamera
 - **Service Worker** für Offline-Cache
 - **PWA Manifest** für Installation
+
+## Architektur
+
+```
+app.js                    Frame-Loop + Verkabelung
+modules/
+  camera.js               getUserMedia + Frame-Grabbing
+  detector.js             Graustufen → Blur → Sobel → Hough → NMS
+  ranker.js               Bälle nach Pixel-Abstand zur Bildmitte sortieren
+  renderer.js             Canvas-Overlay: Fadenkreuz, Linien, Marker, Labels
+  level.js                Wasserwaage via DeviceOrientation
+  pwa.js                  Service Worker Registration + Install Prompt
+```
 
 ## Lokal entwickeln
 
 ```bash
-# Beliebigen statischen Server starten, z.B.:
-python -m http.server 8765
+python3 -m http.server 8765
 
-# Dann öffnen: http://localhost:8765
+# App:   http://localhost:8765
+# Tests: http://localhost:8765/tests/runner.html
 ```
 
-PWA-Features (Service Worker, Kamera) brauchen **HTTPS oder localhost**.
+PWA-Features (Service Worker, Kamera) brauchen **HTTPS oder localhost**. Für Smartphone-Tests im lokalen Netz: `ngrok http 8765` oder ein selbst-signiertes Zertifikat.
 
 ## Deployment
 
-Da rein statisch, läuft die App auf jedem CDN. Empfohlen:
+Da rein statisch, läuft die App auf jedem CDN mit HTTPS:
 
 - **GitHub Pages** — direkt aus diesem Repo (Settings → Pages → main branch).
-- **Cloudflare Pages** — schnellster CDN, GitHub-Integration, kostenlos.
+- **Cloudflare Pages** — schnellster CDN, kostenlos.
 - **Netlify** / **Vercel** — Drag-and-Drop oder Git-Integration.
-
-Alle bieten kostenloses HTTPS, das die PWA braucht.
 
 ## Struktur
 
 ```
 .
-├── index.html         # UI + Layout
-├── app.js             # Logik (Canvas, Detection, State)
-├── sw.js              # Service Worker
-├── manifest.json      # PWA Manifest
-├── icons/             # App-Icons (PWA / Favicon / Apple Touch)
-├── generate_icons.py  # Icon-Generator (PIL)
-└── test.js            # Playwright Smoke-Test (lokal)
+├── index.html            UI + Layout
+├── styles.css            Styles
+├── app.js                Bootstrap + Frame-Loop
+├── modules/              Logik-Module (camera, detector, ranker, renderer, level, pwa)
+├── sw.js                 Service Worker
+├── manifest.json         PWA Manifest
+├── icons/                App-Icons
+├── tests/                Browser-Test-Runner + Unit-Tests
+└── docs/superpowers/     Spec + Implementation Plan
 ```
 
 ## Lizenz

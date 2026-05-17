@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bouli Tests</title>
+  <style>
+    body { font-family: system-ui, monospace; padding: 16px; background: #111; color: #ddd; }
+    pre { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Bouli Tests</h1>
+  <div id="output"></div>
+  <script type="module">
+    // Test files will be imported here as they are created (Tasks 3, 4, 5, 6, 9):
+    // import './ranker.test.js';
+    // import './detector.test.js';
+    // import './level.test.js';
+    import { run } from './harness.js';
+    run();
+  </script>
+</body>
+</html>

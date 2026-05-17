@@ -86,5 +86,5 @@ test('nonMaxSuppression: keeps only highest-score in cluster', () => {
 });
 
 test('nonMaxSuppression: empty input returns empty', () => {
-  assertEqual(nonMaxSuppression([], 10).length, 0);
+  assertEqual(nonMaxSuppression([], 10), []);
 });

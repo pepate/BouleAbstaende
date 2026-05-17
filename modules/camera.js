@@ -3,7 +3,7 @@ let videoEl = null;
 let detectionCanvas = null;
 let detectionCtx = null;
 
-export async function start(video, detectionWidth = 480, detectionHeight = 640) {
+export async function start(video, detectionMaxDim = 480) {
   videoEl = video;
   stream = await navigator.mediaDevices.getUserMedia({
     video: {
@@ -14,15 +14,25 @@ export async function start(video, detectionWidth = 480, detectionHeight = 640) 
     audio: false,
   });
   video.srcObject = stream;
-  await new Promise((resolve, reject) => {
-    video.onloadedmetadata = resolve;
-    video.onerror = reject;
-  });
+  if (video.readyState < 1) {
+    await new Promise((resolve, reject) => {
+      const onMeta = () => { video.removeEventListener('loadedmetadata', onMeta); resolve(); };
+      const onErr = (e) => { video.removeEventListener('error', onErr); reject(e); };
+      video.addEventListener('loadedmetadata', onMeta);
+      video.addEventListener('error', onErr);
+    });
+  }
   await video.play();
 
+  // Detection canvas matches video aspect ratio (avoids non-uniform stretching
+  // that would turn circles into ellipses and break Hough detection).
+  const vw = video.videoWidth || 1920;
+  const vh = video.videoHeight || 1080;
+  const longest = Math.max(vw, vh);
+  const scale = detectionMaxDim / longest;
   detectionCanvas = document.createElement('canvas');
-  detectionCanvas.width = detectionWidth;
-  detectionCanvas.height = detectionHeight;
+  detectionCanvas.width = Math.round(vw * scale);
+  detectionCanvas.height = Math.round(vh * scale);
   detectionCtx = detectionCanvas.getContext('2d', { willReadFrequently: true });
 }
 

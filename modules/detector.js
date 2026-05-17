@@ -47,32 +47,46 @@ const N_ANGLES = 60;
 
 export function houghCircles(edges, w, h, rMin, rMax, edgeThreshold = 80) {
   const candidates = [];
+  const acc = new Uint16Array(w * h);
+  const dxs = new Int16Array(N_ANGLES);
+  const dys = new Int16Array(N_ANGLES);
+  const accThreshold = Math.max((N_ANGLES * 0.5) | 0, 15);
+
+  // Pre-collect edge pixel coordinates so we don't re-scan the full edge map
+  // for every radius.
+  const edgeX = [];
+  const edgeY = [];
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (edges[y * w + x] >= edgeThreshold) {
+        edgeX.push(x);
+        edgeY.push(y);
+      }
+    }
+  }
+  const nEdges = edgeX.length;
 
   for (let r = rMin; r <= rMax; r++) {
-    const acc = new Uint16Array(w * h);
+    acc.fill(0);
 
-    const dxs = new Int16Array(N_ANGLES);
-    const dys = new Int16Array(N_ANGLES);
     for (let i = 0; i < N_ANGLES; i++) {
       const theta = (2 * Math.PI * i) / N_ANGLES;
       dxs[i] = Math.round(r * Math.cos(theta));
       dys[i] = Math.round(r * Math.sin(theta));
     }
 
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (edges[y * w + x] < edgeThreshold) continue;
-        for (let i = 0; i < N_ANGLES; i++) {
-          const cx = x - dxs[i];
-          const cy = y - dys[i];
-          if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
-            acc[cy * w + cx]++;
-          }
+    for (let e = 0; e < nEdges; e++) {
+      const x = edgeX[e];
+      const y = edgeY[e];
+      for (let i = 0; i < N_ANGLES; i++) {
+        const cx = x - dxs[i];
+        const cy = y - dys[i];
+        if (cx >= 0 && cx < w && cy >= 0 && cy < h) {
+          acc[cy * w + cx]++;
         }
       }
     }
 
-    const accThreshold = Math.max((N_ANGLES * 0.5) | 0, 15);
     for (let y = r; y < h - r; y++) {
       for (let x = r; x < w - r; x++) {
         const score = acc[y * w + x];
@@ -112,7 +126,7 @@ export function detect(imageData, options = {}) {
   const blurred = gaussianBlur(gray, w, h);
   const edges = sobel(blurred, w, h);
   const candidates = houghCircles(edges, w, h, rMin, rMax, edgeThreshold);
-  const filtered = nonMaxSuppression(candidates, rMin);
+  const filtered = nonMaxSuppression(candidates, rMin * 2);
 
   return filtered.map(c => ({ x: c.x, y: c.y, r: c.r }));
 }

@@ -31,7 +31,7 @@ export function render(ctx, rankedBalls, cx, cy) {
     const label = rankedBalls.length > 1
       ? `${ball.rank} · ${ball.percent}%`
       : `${ball.rank}`;
-    drawLabel(ctx, label, ball.x + ball.r + 8, ball.y, color);
+    drawLabel(ctx, label, ball, color, w);
   }
 }
 
@@ -54,15 +54,24 @@ function drawCrosshair(ctx, cx, cy) {
   ctx.restore();
 }
 
-function drawLabel(ctx, text, x, y, color) {
+function drawLabel(ctx, text, ball, color, canvasWidth) {
   ctx.save();
   ctx.font = 'bold 14px system-ui, -apple-system, sans-serif';
   const metrics = ctx.measureText(text);
   const pad = 5;
   const lineHeight = 20;
+  const boxWidth = metrics.width + 2 * pad;
+  const gap = 8;
+
+  // Flip label to the left if it would overflow the right edge.
+  let x = ball.x + ball.r + gap;
+  if (x + boxWidth > canvasWidth) {
+    x = ball.x - ball.r - gap - boxWidth;
+  }
+  const y = ball.y;
 
   ctx.fillStyle = COLORS.labelBg;
-  ctx.fillRect(x, y - lineHeight / 2, metrics.width + 2 * pad, lineHeight);
+  ctx.fillRect(x, y - lineHeight / 2, boxWidth, lineHeight);
 
   ctx.fillStyle = color;
   ctx.textBaseline = 'middle';

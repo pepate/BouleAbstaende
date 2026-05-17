@@ -5,8 +5,7 @@ import * as Renderer from './modules/renderer.js';
 import * as Level from './modules/level.js';
 import * as PWA from './modules/pwa.js';
 
-const DETECTION_W = 480;
-const DETECTION_H = 640;
+const DETECTION_MAX_DIM = 480;
 const DETECTION_INTERVAL_MS = 120;
 const TILT_WARN_DEG = 5;
 const TILT_ERROR_DEG = 10;
@@ -25,21 +24,40 @@ function resizeOverlay() {
   overlayCtx = overlayEl.getContext('2d');
 }
 
+// Maps a point in source-frame coordinates to overlay coordinates,
+// mirroring the CSS `object-fit: cover` behavior used on the <video>
+// element so detected ball positions align with what the user sees.
+function coverTransform(srcW, srcH, dstW, dstH) {
+  const srcAR = srcW / srcH;
+  const dstAR = dstW / dstH;
+  let scale, offsetX, offsetY;
+  if (dstAR > srcAR) {
+    scale = dstW / srcW;
+    offsetX = 0;
+    offsetY = (dstH - srcH * scale) / 2;
+  } else {
+    scale = dstH / srcH;
+    offsetX = (dstW - srcW * scale) / 2;
+    offsetY = 0;
+  }
+  return { scale, offsetX, offsetY };
+}
+
 function loop(timestamp) {
   if (!running) return;
 
   if (timestamp - lastDetectAt > DETECTION_INTERVAL_MS) {
-    lastDetectAt = timestamp;
     const frame = Camera.grabFrame();
     if (frame) {
+      lastDetectAt = timestamp;
       const balls = Detector.detect(frame, DETECT_OPTIONS);
-      const sx = overlayEl.width / frame.width;
-      const sy = overlayEl.height / frame.height;
-      const s = Math.min(sx, sy);
+      const { scale, offsetX, offsetY } = coverTransform(
+        frame.width, frame.height, overlayEl.width, overlayEl.height
+      );
       const scaled = balls.map(b => ({
-        x: b.x * sx,
-        y: b.y * sy,
-        r: b.r * s,
+        x: b.x * scale + offsetX,
+        y: b.y * scale + offsetY,
+        r: b.r * scale,
       }));
       const cx = overlayEl.width / 2;
       const cy = overlayEl.height / 2;
@@ -82,10 +100,12 @@ async function start() {
   const errEl = document.getElementById('permission-error');
 
   try {
-    await Camera.start(video, DETECTION_W, DETECTION_H);
+    await Camera.start(video, DETECTION_MAX_DIM);
   } catch (err) {
-    errEl.textContent = 'Kamera-Zugriff verweigert: ' + (err.message ?? err);
-    errEl.hidden = false;
+    if (errEl) {
+      errEl.textContent = 'Kamera-Zugriff verweigert: ' + (err.message ?? err);
+      errEl.hidden = false;
+    }
     return;
   }
 

@@ -1,5 +1,5 @@
 import { test, assertEqual, assertClose, createTestImage } from './harness.js';
-import { toGrayscale, gaussianBlur, sobel, houghCircles, nonMaxSuppression } from '../modules/detector.js';
+import { toGrayscale, gaussianBlur, sobel, houghCircles, nonMaxSuppression, detect } from '../modules/detector.js';
 
 test('toGrayscale: black pixels stay 0', () => {
   const img = createTestImage(2, 2, ctx => {
@@ -87,4 +87,35 @@ test('nonMaxSuppression: keeps only highest-score in cluster', () => {
 
 test('nonMaxSuppression: empty input returns empty', () => {
   assertEqual(nonMaxSuppression([], 10), []);
+});
+
+test('detect: finds three drawn circles in synthetic image', () => {
+  const w = 200, h = 200;
+  const positions = [
+    { x: 50, y: 50, r: 18 },
+    { x: 150, y: 80, r: 20 },
+    { x: 100, y: 160, r: 22 },
+  ];
+  const img = createTestImage(w, h, ctx => {
+    ctx.fillStyle = '#000000';
+    for (const p of positions) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  });
+
+  const found = detect(img, { rMin: 14, rMax: 26, edgeThreshold: 50 });
+
+  if (found.length < 3) {
+    throw new Error(`Expected ≥3 detections, got ${found.length}`);
+  }
+  for (const p of positions) {
+    const hit = found.find(f =>
+      Math.hypot(f.x - p.x, f.y - p.y) < 5 && Math.abs(f.r - p.r) <= 3
+    );
+    if (!hit) {
+      throw new Error(`No detection near (${p.x},${p.y}) r=${p.r}. Got: ${JSON.stringify(found)}`);
+    }
+  }
 });

@@ -101,3 +101,18 @@ export function nonMaxSuppression(candidates, minDistance) {
   }
   return result;
 }
+
+export function detect(imageData, options = {}) {
+  const { width: w, height: h } = imageData;
+  const rMin = options.rMin ?? 15;
+  const rMax = options.rMax ?? 50;
+  const edgeThreshold = options.edgeThreshold ?? 80;
+
+  const gray = toGrayscale(imageData);
+  const blurred = gaussianBlur(gray, w, h);
+  const edges = sobel(blurred, w, h);
+  const candidates = houghCircles(edges, w, h, rMin, rMax, edgeThreshold);
+  const filtered = nonMaxSuppression(candidates, rMin);
+
+  return filtered.map(c => ({ x: c.x, y: c.y, r: c.r }));
+}
